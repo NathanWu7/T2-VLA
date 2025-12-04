@@ -355,6 +355,57 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotLiberoEffortDataConfig(DataConfigFactory):
+    """
+    Libero 数据配置（带 gripper_force 作为 effort）。
+
+    在标准 `LeRobotLiberoDataConfig` 的基础上，将多帧 `observation/gripper_force`
+    透传到后续 policy transform，并最终映射为 `Observation.effort`。
+    """
+
+    extra_delta_transform: bool = False
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/image": "image",
+                        "observation/wrist_image": "wrist_image",
+                        "observation/state": "state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                        # 额外：把多帧 gripper_force 转发出来
+                        "observation/gripper_force": "gripper_force",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[libero_policy.LiberoInputs(model_type=model_config.model_type)],
+            outputs=[libero_policy.LiberoOutputs()],
+        )
+
+        if self.extra_delta_transform:
+            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class RLDSDroidDataConfig(DataConfigFactory):
     """
     Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
@@ -685,6 +736,41 @@ _CONFIGS = [
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
         # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi0_libero_force_low_mem_finetune",
+        # 带力矩历史 + 未来动作/力联合预测的 LoRA 微调配置。
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            # 你当前数据里 action = 7 动作 + 6 力，一共 13 维。
+            action_dim=13,
+            # 与 pi0_libero_low_mem_finetune 保持一致，沿用基线的 action_horizon=50。
+            # 启用我们实现的 EXPERT_HIS_C_FUT 模式：
+            # - 历史力来自 gripper_force[8,6]，flatten 后经 MLP 做 expert token；
+            # - 未来动作/力直接从 actions 的 13 维中学习（前 7 维动作，后 6 维力）。
+            effort_type=EffortType.EXPERT_HIS_C_FUT,
+            effort_dim=6,
+            effort_dim_in=8 * 6,  # gripper_force 的 8 帧历史 * 6 维
+        ),
+        data=LeRobotLiberoEffortDataConfig(
+            # 指向你本地的 libero 力矩数据集；如果你后来把它上传到 HF Hub，可以改成 "user/repo" 形式。
+            repo_id="/home/wqw/git_pkgs/T2-VLA/pi0_data/lerobot_libero_goal",
+            base_config=DataConfig(
+                # 你的数据里如果没有 task->prompt，这里可以保持 False；有的话可以改成 True。
+                prompt_from_task=False,
+            ),
+            extra_delta_transform=False,
+        ),
+        # 初始权重：使用官方 pi0 base checkpoint，然后做 LoRA 微调。
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=30_000,
+        # LoRA 冻结策略：和上面 pi0_libero_low_mem_finetune 一样。
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        # LoRA 微调关闭 EMA。
         ema_decay=None,
     ),
     TrainConfig(

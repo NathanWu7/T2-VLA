@@ -9,6 +9,7 @@ from typing_extensions import override
 from openpi.models import model as _model
 import openpi.models.gemma as _gemma
 from openpi.shared import array_typing as at
+from openpi.shared.effort_type import EffortType
 import openpi.shared.nnx_utils as nnx_utils
 
 if TYPE_CHECKING:
@@ -32,11 +33,22 @@ class Pi0Config(_model.BaseModelConfig):
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
 
+    # Effort / torque configuration (JAX-only; PyTorch side handles its own config).
+    # By default, models ignore effort.
+    effort_type: EffortType = EffortType.NO
+    # Per-timestep effort dimension (e.g., 14 for 7 joints * 2 arms), before history concatenation.
+    effort_dim: int = 14
+    # Effective input dim for the effort MLP projector. Usually effort_dim * len(effort_history).
+    # When not set explicitly (e.g., from training config + data.effort_history), we fall back to effort_dim.
+    effort_dim_in: int | None = None
+
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
         if self.discrete_state_input is None:
             object.__setattr__(self, "discrete_state_input", self.pi05)
+        if self.effort_dim_in is None:
+            object.__setattr__(self, "effort_dim_in", self.effort_dim)
 
     @property
     @override

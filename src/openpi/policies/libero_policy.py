@@ -69,6 +69,12 @@ class LiberoInputs(transforms.DataTransformFn):
             },
         }
 
+        # Optional: multi-frame gripper force as effort / torque input.
+        # For your own dataset, if you store a window of gripper forces under a different key,
+        # map it to "observation/gripper_force" in the repack transform, and it will appear here.
+        if "observation/gripper_force" in data:
+            inputs["effort"] = data["observation/gripper_force"]
+
         # Pad actions to the model action dimension. Keep this for your own dataset.
         # Actions are only available during training.
         if "actions" in data:

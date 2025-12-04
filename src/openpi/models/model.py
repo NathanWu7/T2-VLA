@@ -19,6 +19,7 @@ import torch
 
 from openpi.models_pytorch import pi0_pytorch
 from openpi.shared import image_tools
+from openpi.shared.effort_type import EffortType
 import openpi.shared.array_typing as at
 
 logger = logging.getLogger("openpi")
@@ -64,6 +65,7 @@ IMAGE_RESOLUTION = (224, 224)
 #         ...  # Masks for additional views
 #     },
 #     "state": float32[*b, s],  # Low-dimensional robot state
+#     "effort": float32[*b, n, e],  # Optional, effort / torque history (n frames, e dims)
 #     "tokenized_prompt": int32[*b, l],  # Optional, tokenized language prompt
 #     "tokenized_prompt_mask": bool[*b, l],  # Optional, mask for tokenized prompt
 #     "token_ar_mask": int32[*b, l],  # Optional, autoregressive mask for FAST model
@@ -93,6 +95,9 @@ class Observation(Generic[ArrayT]):
     image_masks: dict[str, at.Bool[ArrayT, "*b"]]
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "*b s"]
+    # Effort / joint torque history. Shape convention: [*b, n, e].
+    # When effort is not used, this is None and the model ignores it.
+    effort: at.Float[ArrayT, "*b n e"] | None = None
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
@@ -122,6 +127,7 @@ class Observation(Generic[ArrayT]):
             images=data["image"],
             image_masks=data["image_mask"],
             state=data["state"],
+            effort=data.get("effort"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -148,6 +154,7 @@ def preprocess_observation(
     train: bool = False,
     image_keys: Sequence[str] = IMAGE_KEYS,
     image_resolution: tuple[int, int] = IMAGE_RESOLUTION,
+    effort_type: EffortType = EffortType.NO,
 ) -> Observation:
     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
     filling in a default image mask (if necessary).
@@ -197,10 +204,19 @@ def preprocess_observation(
         else:
             out_masks[key] = jnp.asarray(observation.image_masks[key])
 
+    # Handle effort according to EffortType to produce the state/effort fields seen by the model.
+    state = observation.state
+    effort = observation.effort
+
+    if effort is not None and effort_type is EffortType.NO:
+        # 模型完全忽略 effort。
+        effort = None
+
     return Observation(
         images=out_images,
         image_masks=out_masks,
-        state=observation.state,
+        state=state,
+        effort=effort,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,

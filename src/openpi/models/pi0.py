@@ -12,6 +12,7 @@ from openpi.models import pi0_config
 import openpi.models.gemma as _gemma
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
+from openpi.shared.effort_type import EffortType
 
 logger = logging.getLogger("openpi")
 
@@ -67,6 +68,11 @@ class Pi0(_model.BaseModel):
     def __init__(self, config: pi0_config.Pi0Config, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
+        self.effort_type = config.effort_type
+        self.effort_dim = config.effort_dim
+
+        if self.pi05 and self.effort_type is not EffortType.NO:
+            raise ValueError("Effort inputs / predictions are currently only supported for standard Pi0 (pi05=False).")
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
@@ -89,18 +95,69 @@ class Pi0(_model.BaseModel):
         )
         img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
-        self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
+
+        # Effort projection (history encoder) — 当前仅支持 EXPERT_HIS_C_FUT 一种模式。
+        if self.effort_type is EffortType.EXPERT_HIS_C_FUT:
+            self.effort_proj_in = nnx.Linear(config.effort_dim_in, 2 * action_expert_config.width, rngs=rngs)
+            self.effort_proj_out = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
+        else:
+            self.effort_proj_in = None
+            self.effort_proj_out = None
+
+        # Action / time path.
         if config.pi05:
+            # Pi05: same action dim as config.action_dim, no explicit state token.
+            self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
             self.time_mlp_in = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
             self.time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
+            self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
         else:
+            # Pi0: 对 EXPERT_HIS_C_FUT，action_dim 保持不变（例如 7 动作 + 6 力，共 13 维），
+            # 在 loss 内部按 [动作vs力] 维度切分加权。
+            self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
+            self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
+
             self.state_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
             self.action_time_mlp_in = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
-        self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
+
+    def _project_effort(self, effort: at.Float[at.Array, "b *d"]) -> at.Float[at.Array, "b emb"]:
+        if self.effort_proj_in is None or self.effort_proj_out is None:
+            raise ValueError("Effort projection is not initialized but was called.")
+        effort_hidden = self.effort_proj_in(effort)
+        effort_hidden = nnx.swish(effort_hidden)
+        return self.effort_proj_out(effort_hidden)
+
+    def _process_effort_tokens(
+        self, obs: _model.Observation, mode: str
+    ) -> tuple[list[jax.Array], list[jax.Array], list[bool]]:
+        """Build effort tokens for either the LLM prefix or expert suffix."""
+        tokens_list: list[jax.Array] = []
+        input_mask_list: list[jax.Array] = []
+        ar_mask_list: list[bool] = []
+
+        if obs.effort is None or self.effort_type is EffortType.NO:
+            return tokens_list, input_mask_list, ar_mask_list
+
+        # suffix tokens will not be attended by postfix tokens
+        ar_mask_value = mode == "suffix"
+
+        if mode == "suffix" and self.effort_type is EffortType.EXPERT_HIS_C_FUT:
+            # 将多帧历史 effort concat 成一个向量，作为单个 expert token。
+            if obs.effort.ndim == obs.state.ndim + 1:
+                batch_size, _, _ = obs.effort.shape
+                effort_flat = obs.effort.reshape(batch_size, -1)
+            else:
+                effort_flat = obs.effort
+            effort_token = self._project_effort(effort_flat)[:, None, :]
+            tokens_list.append(effort_token)
+            input_mask_list.append(jnp.ones(effort_token.shape[:2], dtype=jnp.bool_))
+            ar_mask_list.append(ar_mask_value)
+
+        return tokens_list, input_mask_list, ar_mask_list
 
     @at.typecheck
     def embed_prefix(
@@ -131,6 +188,13 @@ class Pi0(_model.BaseModel):
             input_mask.append(obs.tokenized_prompt_mask)
             # full attention between image and language inputs
             ar_mask += [False] * tokenized_inputs.shape[1]
+
+        # add effort tokens to LLM prefix if requested
+        effort_tokens, effort_input_mask, effort_ar_mask = self._process_effort_tokens(obs, mode="prefix")
+        tokens.extend(effort_tokens)
+        input_mask.extend(effort_input_mask)
+        ar_mask.extend(effort_ar_mask)
+
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
         ar_mask = jnp.array(ar_mask)
@@ -148,7 +212,14 @@ class Pi0(_model.BaseModel):
         input_mask = []
         ar_mask = []
         tokens = []
+
         if not self.pi05:
+            # For Pi0, optionally add effort tokens to the expert suffix (EXPERT_HIS_C_FUT, etc.).
+            effort_tokens, effort_input_mask, effort_ar_mask = self._process_effort_tokens(obs, mode="suffix")
+            tokens.extend(effort_tokens)
+            input_mask.extend(effort_input_mask)
+            ar_mask.extend(effort_ar_mask)
+
             # add a single state token
             state_token = self.state_proj(obs.state)[:, None, :]
             tokens.append(state_token)
@@ -180,6 +251,7 @@ class Pi0(_model.BaseModel):
         input_mask.append(jnp.ones(action_expert_tokens.shape[:2], dtype=jnp.bool_))
         # image/language/state inputs do not attend to action tokens
         ar_mask += [True] + ([False] * (self.action_horizon - 1))
+
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
         ar_mask = jnp.array(ar_mask)
@@ -190,7 +262,12 @@ class Pi0(_model.BaseModel):
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
-        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
+        observation = _model.preprocess_observation(
+            preprocess_rng,
+            observation,
+            train=train,
+            effort_type=self.effort_type,
+        )
 
         batch_shape = actions.shape[:-2]
         noise = jax.random.normal(noise_rng, actions.shape)
@@ -211,6 +288,20 @@ class Pi0(_model.BaseModel):
         )
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
+        if self.effort_type is EffortType.EXPERT_HIS_C_FUT:
+            # EXPERT_HIS_C_FUT（方案 B）：actions 本身已经包含 [动作, 力]。
+            # 约定：前 (action_dim - effort_dim) 维是动作，后 effort_dim 维是力矩。
+            ctrl_dim = self.action_dim - self.effort_dim
+            if ctrl_dim <= 0:
+                raise ValueError(
+                    f"EXPERT_HIS_C_FUT requires action_dim ({self.action_dim}) > effort_dim ({self.effort_dim})."
+                )
+            action_loss = jnp.mean(jnp.square(v_t[..., :ctrl_dim] - u_t[..., :ctrl_dim]), axis=-1)
+            effort_loss = jnp.mean(
+                jnp.square(v_t[..., ctrl_dim:] - u_t[..., ctrl_dim:]),
+                axis=-1,
+            )
+            return action_loss + 0.1 * effort_loss
         return jnp.mean(jnp.square(v_t - u_t), axis=-1)
 
     @override
@@ -222,12 +313,18 @@ class Pi0(_model.BaseModel):
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
     ) -> _model.Actions:
-        observation = _model.preprocess_observation(None, observation, train=False)
+        observation = _model.preprocess_observation(
+            None,
+            observation,
+            train=False,
+            effort_type=self.effort_type,
+        )
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
         dt = -1.0 / num_steps
         batch_size = observation.state.shape[0]
         if noise is None:
+            # EXPERT_HIS_C_FUT 中，actions 维度保持为 self.action_dim（7 动作 + 6 力等）。
             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
 
         # first fill KV cache with a forward pass of the prefix
