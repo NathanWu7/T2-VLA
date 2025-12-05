@@ -70,6 +70,9 @@ class Pi0(_model.BaseModel):
         self.pi05 = config.pi05
         self.effort_type = config.effort_type
         self.effort_dim = config.effort_dim
+        # 有效 action 维度：用于 loss 中的 [动作, 力矩] 切分。
+        # 允许数据只在前 K 维有意义，其余为 padding。
+        self.effective_action_dim = config.effective_action_dim
 
         if self.pi05 and self.effort_type is not EffortType.NO:
             raise ValueError("Effort inputs / predictions are currently only supported for standard Pi0 (pi05=False).")
@@ -290,18 +293,25 @@ class Pi0(_model.BaseModel):
 
         if self.effort_type is EffortType.EXPERT_HIS_C_FUT:
             # EXPERT_HIS_C_FUT（方案 B）：actions 本身已经包含 [动作, 力]。
-            # 约定：前 (action_dim - effort_dim) 维是动作，后 effort_dim 维是力矩。
-            ctrl_dim = self.action_dim - self.effort_dim
+            # 约定：在“有效 action 维度” effective_action_dim 内，前 (effective_action_dim - effort_dim) 维是动作，
+            # 随后的 effort_dim 维是力矩，其后的维度（如果有）视为 padding，并且在 loss 中完全忽略。
+            effective_ad = self.effective_action_dim
+            ctrl_dim = effective_ad - self.effort_dim
             if ctrl_dim <= 0:
                 raise ValueError(
-                    f"EXPERT_HIS_C_FUT requires action_dim ({self.action_dim}) > effort_dim ({self.effort_dim})."
+                    "EXPERT_HIS_C_FUT requires effective_action_dim "
+                    f"({effective_ad}) > effort_dim ({self.effort_dim})."
                 )
+            # 动作损失：只在前 ctrl_dim 维计算（例如 7 个关节）。
             action_loss = jnp.mean(jnp.square(v_t[..., :ctrl_dim] - u_t[..., :ctrl_dim]), axis=-1)
+            # 力矩损失：紧接着的 effort_dim 维（例如第 8–13 维），其余 padding 维度忽略。
+            effort_slice = slice(ctrl_dim, ctrl_dim + self.effort_dim)
             effort_loss = jnp.mean(
-                jnp.square(v_t[..., ctrl_dim:] - u_t[..., ctrl_dim:]),
+                jnp.square(v_t[..., effort_slice] - u_t[..., effort_slice]),
                 axis=-1,
             )
             return action_loss + 0.1 * effort_loss
+
         return jnp.mean(jnp.square(v_t - u_t), axis=-1)
 
     @override

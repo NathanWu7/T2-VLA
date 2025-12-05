@@ -46,12 +46,15 @@ class CheckpointWeightLoader(WeightLoader):
     """
 
     params_path: str
+    # Regex 用于指定哪些“在 checkpoint 中缺失、但在当前模型参数里存在”的参数
+    # 需要从当前模型参数中补齐。默认只补 LoRA 权重，保持原有行为。
+    missing_regex: str = ".*lora.*"
 
     def load(self, params: at.Params) -> at.Params:
         # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
         loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
-        # Add all missing LoRA weights.
-        return _merge_params(loaded_params, params, missing_regex=".*lora.*")
+        # Add all missing weights that匹配 missing_regex（例如 LoRA 或新增模块的权重）。
+        return _merge_params(loaded_params, params, missing_regex=self.missing_regex)
 
 
 @dataclasses.dataclass(frozen=True)

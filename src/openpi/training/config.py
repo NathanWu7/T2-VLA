@@ -22,6 +22,7 @@ import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
+from openpi.shared.effort_type import EffortType
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
@@ -745,7 +746,10 @@ _CONFIGS = [
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
             # 你当前数据里 action = 7 动作 + 6 力，一共 13 维。
-            action_dim=13,
+            # 模型内部 action_dim 仍然保持 32（与官方 checkpoint 对齐），
+            # 但通过 effective_action_dim=13 告诉模型：前 13 维才是“有语义的”，
+            # 其中前 7 维是动作，第 8–13 维是力矩，其余视为 padding。
+            effective_action_dim=13,
             # 与 pi0_libero_low_mem_finetune 保持一致，沿用基线的 action_horizon=50。
             # 启用我们实现的 EXPERT_HIS_C_FUT 模式：
             # - 历史力来自 gripper_force[8,6]，flatten 后经 MLP 做 expert token；
@@ -756,21 +760,40 @@ _CONFIGS = [
         ),
         data=LeRobotLiberoEffortDataConfig(
             # 指向你本地的 libero 力矩数据集；如果你后来把它上传到 HF Hub，可以改成 "user/repo" 形式。
-            repo_id="/home/wqw/git_pkgs/T2-VLA/pi0_data/lerobot_libero_goal",
+            # 注意这里需要给到真正的 LeRobot 数据集根目录（包含 meta/info.json 的那一层）。
+            repo_id="/home/qiweiw/gitlabs/TacManip/benchmarks/datasets/pi0/tabero_pi0/lerobot_libero_goal",
+            assets=AssetsConfig(
+                assets_dir="/home/qiweiw/gitlabs/TacManip/benchmarks/datasets/pi0/tabero_pi0",
+                asset_id="lerobot_libero_goal"
+            ),
             base_config=DataConfig(
                 # 你的数据里如果没有 task->prompt，这里可以保持 False；有的话可以改成 True。
-                prompt_from_task=False,
+                prompt_from_task=True,
             ),
-            extra_delta_transform=False,
+            extra_delta_transform=True,
         ),
+        # 注意：这里使用 base pi0 checkpoint 来初始化绝大部分权重，
+        # 对于新增的 effort_proj_in/effort_proj_out 这类在 checkpoint 中不存在的参数，
+        # 会通过 missing_regex=".*" 让它们保持模型随机初始化的值。
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi0_base/params",
+            missing_regex=".*",
+        ),
+        # data=LeRobotLiberoDataConfig(
+        #     repo_id="/home/qiweiw/gitlabs/TacManip/benchmarks/datasets/pi0/lerobot_all_libero_suites",
+        #     assets=AssetsConfig(
+        #         assets_dir="/home/qiweiw/gitlabs/TacManip/benchmarks/datasets/pi0",
+        #         asset_id="lerobot_all_libero_suites"
+        #     ),
+        #     base_config=DataConfig(prompt_from_task=True),
+        #     extra_delta_transform=True,
+        # ),
         # 初始权重：使用官方 pi0 base checkpoint，然后做 LoRA 微调。
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        # 其余设置与上方 pi0_libero_low_mem_finetune 保持一致。
         num_train_steps=30_000,
-        # LoRA 冻结策略：和上面 pi0_libero_low_mem_finetune 一样。
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
-        # LoRA 微调关闭 EMA。
         ema_decay=None,
     ),
     TrainConfig(

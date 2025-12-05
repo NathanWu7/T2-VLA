@@ -41,6 +41,10 @@ class Pi0Config(_model.BaseModelConfig):
     # Effective input dim for the effort MLP projector. Usually effort_dim * len(effort_history).
     # When not set explicitly (e.g., from training config + data.effort_history), we fall back to effort_dim.
     effort_dim_in: int | None = None
+    # 有效的“语义 action 维度”。当数据中的 action 先 padding 到较大的 action_dim（例如 32），
+    # 但真实只有前 K 维有意义时，可以把 effective_action_dim 设为 K，用于 loss 中的动作/力矩切分。
+    # 默认为 action_dim，保持向后兼容。
+    effective_action_dim: int | None = None
 
     def __post_init__(self):
         if self.max_token_len is None:
@@ -49,6 +53,8 @@ class Pi0Config(_model.BaseModelConfig):
             object.__setattr__(self, "discrete_state_input", self.pi05)
         if self.effort_dim_in is None:
             object.__setattr__(self, "effort_dim_in", self.effort_dim)
+        if self.effective_action_dim is None:
+            object.__setattr__(self, "effective_action_dim", self.action_dim)
 
     @property
     @override
