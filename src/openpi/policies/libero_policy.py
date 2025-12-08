@@ -101,6 +101,16 @@ class LiberoOutputs(transforms.DataTransformFn):
     def __call__(self, data: dict) -> dict:
         # Only return the first N actions -- since we padded actions above to fit the model action
         # dimension, we need to now parse out the correct number of actions in the return dict.
-        # For Libero, we only return the first 7 actions (since the rest is padding).
-        # For your own dataset, replace `7` with the action dimension of your dataset.
+        # 对于官方 Libero，我们只返回前 7 维关节动作（其余为 padding）。
         return {"actions": np.asarray(data["actions"][:, :7])}
+
+
+@dataclasses.dataclass(frozen=True)
+class LiberoForceOutputs(transforms.DataTransformFn):
+    """
+    Libero 输出变换（带力矩）：返回前 13 维（7 动作 + 6 力），用于你当前的力矩方案。
+    """
+
+    def __call__(self, data: dict) -> dict:
+        # data["actions"] 形状为 [B, H, D]，这里裁剪到前 13 维（7 动作 + 6 力）。
+        return {"actions": np.asarray(data["actions"][:, :, :13])}

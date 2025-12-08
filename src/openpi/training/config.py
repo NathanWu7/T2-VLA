@@ -386,7 +386,7 @@ class LeRobotLiberoEffortDataConfig(DataConfigFactory):
 
         data_transforms = _transforms.Group(
             inputs=[libero_policy.LiberoInputs(model_type=model_config.model_type)],
-            outputs=[libero_policy.LiberoOutputs()],
+            outputs=[libero_policy.LiberoForceOutputs()]
         )
 
         if self.extra_delta_transform:
