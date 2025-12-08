@@ -113,4 +113,4 @@ class LiberoForceOutputs(transforms.DataTransformFn):
 
     def __call__(self, data: dict) -> dict:
         # data["actions"] 形状为 [B, H, D]，这里裁剪到前 13 维（7 动作 + 6 力）。
-        return {"actions": np.asarray(data["actions"][:, :, :13])}
+        return {"actions": np.asarray(data["actions"][:, :13])}
