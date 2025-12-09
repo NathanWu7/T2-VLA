@@ -759,13 +759,12 @@ _CONFIGS = [
             effort_dim_in=8 * 6,  # gripper_force 的 8 帧历史 * 6 维
         ),
         data=LeRobotLiberoEffortDataConfig(
-            # 指向你本地的 libero 力矩数据集；如果你后来把它上传到 HF Hub，可以改成 "user/repo" 形式。
-            # 注意这里需要给到真正的 LeRobot 数据集根目录（包含 meta/info.json 的那一层）。
-            repo_id="/home/qiweiw/gitlabs/TacManip/benchmarks/datasets/pi0/tabero_pi0/lerobot_libero_goal",
-            assets=AssetsConfig(
-                assets_dir="/home/qiweiw/gitlabs/TacManip/benchmarks/datasets/pi0/tabero_pi0",
-                asset_id="lerobot_libero_goal"
-            ),
+            # 使用你在 Hugging Face 上的 LeRobot 数据集仓库作为 repo_id。
+            # 这里直接填 HF Hub 的 dataset id，DataLoader 会通过 fsspec 拉取数据。
+            repo_id="NathanWu7/tabero_force",
+            # 这里不再强制指定本地 assets_dir，norm_stats 训练后会先保存在本地
+            #   ./assets/pi0_libero_force_low_mem_finetune/NathanWu7_tabero_force/...
+            # 然后你可以把这整个目录和 checkpoint 一起上传到同一个 HF 仓库。
             base_config=DataConfig(
                 # 你的数据里如果没有 task->prompt，这里可以保持 False；有的话可以改成 True。
                 prompt_from_task=True,
