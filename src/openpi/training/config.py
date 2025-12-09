@@ -789,7 +789,7 @@ _CONFIGS = [
         # ),
         # 初始权重：使用官方 pi0 base checkpoint，然后做 LoRA 微调。
         # 其余设置与上方 pi0_libero_low_mem_finetune 保持一致。
-        num_train_steps=30_000,
+        num_train_steps=50_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
