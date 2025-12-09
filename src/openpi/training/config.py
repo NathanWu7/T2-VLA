@@ -407,6 +407,55 @@ class LeRobotLiberoEffortDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotLiberoNoEffortDataConfig(DataConfigFactory):
+    """Libero 数据配置（不使用 gripper_force / effort，只保留前 7 维动作）。"""
+
+    extra_delta_transform: bool = False
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # 与 LeRobotLiberoDataConfig 相同的 repack，只是不再转发 gripper_force。
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/image": "image",
+                        "observation/wrist_image": "wrist_image",
+                        "observation/state": "state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        # 数据流：LiberoInputs 负责 key 适配与 padding，SliceActions(7) 将动作截断到前 7 维。
+        data_transforms = _transforms.Group(
+            inputs=[
+                libero_policy.LiberoInputs(model_type=model_config.model_type),
+                _transforms.SliceActions(7),
+            ],
+            outputs=[libero_policy.LiberoOutputs()],
+        )
+
+        if self.extra_delta_transform:
+            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class RLDSDroidDataConfig(DataConfigFactory):
     """
     Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
@@ -740,7 +789,27 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi0_libero_force_low_mem_finetune",
+        name="pi0_libero_low_mem_finetune_wo_force",
+        # 与 pi0_libero_low_mem_finetune 使用相同的 LoRA 配置，但在 Tabero 力矩数据上
+        # 只使用前 7 维关节动作，不使用 effort。
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotLiberoNoEffortDataConfig(
+            repo_id="NathanWu7/tabero_force",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi0_libero_force_low_mem_finetune_dec",
         # 带力矩历史 + 未来动作/力联合预测的 LoRA 微调配置。
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
@@ -859,6 +928,77 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=30_000,
+    ),
+    TrainConfig(
+        name="pi05_libero_force_dec",
+        # Pi05 力矩（decoder 版）：8×6 effort 先 flatten→MLP→变成单个 effort token，
+        # 只在 suffix（expert decoder）前拼接，和 state token + action tokens 串联。
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            effective_action_dim=13,
+            effort_type=EffortType.EXPERT_HIS_C_FUT,
+            effort_dim=6,
+            effort_dim_in=8 * 6,
+        ),
+        data=LeRobotLiberoEffortDataConfig(
+            repo_id="NathanWu7/tabero_force",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*",
+        ),
+        num_train_steps=30_000,
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+    ),
+    TrainConfig(
+        name="pi05_libero_force_enc",
+        # Pi05 力矩（encoder 版）：8×6 effort 先 flatten→MLP→变成单个 effort token，
+        # 只在 prefix 侧与视觉 token、语言 token、state token 串联，suffix 仅看动作 + 时间。
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            effective_action_dim=13,
+            effort_type=EffortType.EXPERT_HIS_C_FUT,
+            effort_dim=6,
+            effort_dim_in=8 * 6,
+            effort_in_prefix_only=True,
+        ),
+        data=LeRobotLiberoEffortDataConfig(
+            repo_id="NathanWu7/tabero_force",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*",
+        ),
+        num_train_steps=30_000,
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
     ),
     #
     # Fine-tuning Aloha configs.

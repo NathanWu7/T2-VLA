@@ -73,9 +73,15 @@ class Pi0(_model.BaseModel):
         # 有效 action 维度：用于 loss 中的 [动作, 力矩] 切分。
         # 允许数据只在前 K 维有意义，其余为 padding。
         self.effective_action_dim = config.effective_action_dim
+        # 控制 effort token 只放在 prefix（encoder）还是只放在 suffix（decoder）。
+        self.effort_in_prefix_only = config.effort_in_prefix_only
 
-        if self.pi05 and self.effort_type is not EffortType.NO:
-            raise ValueError("Effort inputs / predictions are currently only supported for standard Pi0 (pi05=False).")
+        # 仅禁止尚未实现的 EffortType 组合；允许 pi05 + EXPERT_HIS_C_FUT。
+        if self.pi05 and self.effort_type not in (EffortType.NO, EffortType.EXPERT_HIS_C_FUT):
+            raise ValueError(
+                f"EffortType {self.effort_type} is not supported for Pi05; "
+                "only EffortType.NO and EffortType.EXPERT_HIS_C_FUT are allowed."
+            )
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
@@ -148,17 +154,23 @@ class Pi0(_model.BaseModel):
         # suffix tokens will not be attended by postfix tokens
         ar_mask_value = mode == "suffix"
 
-        if mode == "suffix" and self.effort_type is EffortType.EXPERT_HIS_C_FUT:
-            # 将多帧历史 effort concat 成一个向量，作为单个 expert token。
-            if obs.effort.ndim == obs.state.ndim + 1:
-                batch_size, _, _ = obs.effort.shape
-                effort_flat = obs.effort.reshape(batch_size, -1)
-            else:
-                effort_flat = obs.effort
-            effort_token = self._project_effort(effort_flat)[:, None, :]
-            tokens_list.append(effort_token)
-            input_mask_list.append(jnp.ones(effort_token.shape[:2], dtype=jnp.bool_))
-            ar_mask_list.append(ar_mask_value)
+        if self.effort_type is EffortType.EXPERT_HIS_C_FUT:
+            # decoder 版本（默认）：只在 suffix 前加 effort token。
+            use_in_suffix = mode == "suffix" and not self.effort_in_prefix_only
+            # encoder 版本：只在 prefix 里加 effort token。
+            use_in_prefix = mode == "prefix" and self.effort_in_prefix_only
+
+            if use_in_suffix or use_in_prefix:
+                # 将多帧历史 effort concat 成一个向量，作为单个 expert / conditioning token。
+                if obs.effort.ndim == obs.state.ndim + 1:
+                    batch_size, _, _ = obs.effort.shape
+                    effort_flat = obs.effort.reshape(batch_size, -1)
+                else:
+                    effort_flat = obs.effort
+                effort_token = self._project_effort(effort_flat)[:, None, :]
+                tokens_list.append(effort_token)
+                input_mask_list.append(jnp.ones(effort_token.shape[:2], dtype=jnp.bool_))
+                ar_mask_list.append(ar_mask_value)
 
         return tokens_list, input_mask_list, ar_mask_list
 
@@ -216,14 +228,14 @@ class Pi0(_model.BaseModel):
         ar_mask = []
         tokens = []
 
-        if not self.pi05:
-            # For Pi0, optionally add effort tokens to the expert suffix (EXPERT_HIS_C_FUT, etc.).
-            effort_tokens, effort_input_mask, effort_ar_mask = self._process_effort_tokens(obs, mode="suffix")
-            tokens.extend(effort_tokens)
-            input_mask.extend(effort_input_mask)
-            ar_mask.extend(effort_ar_mask)
+        # 可选：在 expert suffix 前添加 effort token（Pi0 与 Pi05 共享逻辑）。
+        effort_tokens, effort_input_mask, effort_ar_mask = self._process_effort_tokens(obs, mode="suffix")
+        tokens.extend(effort_tokens)
+        input_mask.extend(effort_input_mask)
+        ar_mask.extend(effort_ar_mask)
 
-            # add a single state token
+        if not self.pi05:
+            # 仅对标准 Pi0 添加显式 state token；Pi05 使用离散 state 编码，不再需要此 token。
             state_token = self.state_proj(obs.state)[:, None, :]
             tokens.append(state_token)
             input_mask.append(jnp.ones((obs.state.shape[0], 1), dtype=jnp.bool_))

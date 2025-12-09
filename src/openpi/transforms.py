@@ -245,6 +245,18 @@ class AbsoluteActions(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class SliceActions(DataTransformFn):
+    """Slice the action dimensions to the first `dim` components."""
+
+    dim: int
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" in data:
+            data["actions"] = data["actions"][..., : self.dim]
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
     discrete_state_input: bool = False

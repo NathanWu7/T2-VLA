@@ -45,6 +45,9 @@ class Pi0Config(_model.BaseModelConfig):
     # 但真实只有前 K 维有意义时，可以把 effective_action_dim 设为 K，用于 loss 中的动作/力矩切分。
     # 默认为 action_dim，保持向后兼容。
     effective_action_dim: int | None = None
+    # Effort token 位置：默认为仅在 suffix（decoder）侧插入；
+    # 当 effort_in_prefix_only=True 时，仅在 prefix（encoder）侧插入。
+    effort_in_prefix_only: bool = False
 
     def __post_init__(self):
         if self.max_token_len is None:
