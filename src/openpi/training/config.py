@@ -930,6 +930,37 @@ _CONFIGS = [
         num_train_steps=30_000,
     ),
     TrainConfig(
+        name="pi05_libero_wo_force",
+        # Pi05 Tabero 数据，只使用 7 维关节动作，不读力矩（effort）。
+        # 结构上仿照 pi0_libero_low_mem_finetune_wo_force，但使用 Pi05 模型与相同 Tabero 数据。
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+        ),
+        data=LeRobotLiberoNoEffortDataConfig(
+            repo_id="NathanWu7/tabero_force",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*",
+        ),
+        num_train_steps=30_000,
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+    ),
+    TrainConfig(
         name="pi05_libero_force_dec",
         # Pi05 力矩（decoder 版）：8×6 effort 先 flatten→MLP→变成单个 effort token，
         # 只在 suffix（expert decoder）前拼接，和 state token + action tokens 串联。
@@ -954,7 +985,7 @@ _CONFIGS = [
             missing_regex=".*",
         ),
         num_train_steps=30_000,
-        batch_size=256,
+        batch_size=32,
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=10_000,
             peak_lr=5e-5,
