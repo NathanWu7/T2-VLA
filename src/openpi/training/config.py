@@ -809,7 +809,7 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi0_libero_force_low_mem_finetune_dec",
+        name="pi0_libero_force_low_mem_finetune",
         # 带力矩历史 + 未来动作/力联合预测的 LoRA 微调配置。
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
