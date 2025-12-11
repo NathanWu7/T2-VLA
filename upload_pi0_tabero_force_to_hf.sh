@@ -49,8 +49,8 @@ cd "${ROOT_DIR}"
 
 echo "[INFO] 当前工程根目录: ${ROOT_DIR}"
 
-if ! command -v huggingface-cli >/dev/null 2>&1; then
-  echo "[ERROR] 没找到 huggingface-cli，请先安装：pip install 'huggingface_hub[cli]'" >&2
+if ! uv run huggingface-cli env >/dev/null 2>&1; then
+  echo "[ERROR] 没找到 huggingface-cli，请先安装：uv pip install 'huggingface_hub[cli]'" >&2
   exit 1
 fi
 
@@ -94,13 +94,34 @@ echo "       Norm stats : ${NORM_SRC}"
 ########################################
 
 echo "[INFO] 确保 Hugging Face 仓库存在: ${HF_REPO_ID}"
-huggingface-cli repo create "${HF_REPO_ID}" --type "${HF_REPO_TYPE}" --yes || true
+uv run huggingface-cli repo create "${HF_REPO_ID}" --type "${HF_REPO_TYPE}" --yes || true
 
 echo "[INFO] 清理并从 Hugging Face 仓库 clone 到本地导出目录: ${EXPORT_DIR}"
 rm -rf "${EXPORT_DIR}"
 git clone "https://huggingface.co/${HF_REPO_ID}" "${EXPORT_DIR}"
 
 cd "${EXPORT_DIR}"
+
+#----------------------------------------
+# 首次运行时自动为 checkpoints / norm_stats 启用 Git LFS
+#----------------------------------------
+if command -v git-lfs >/dev/null 2>&1; then
+  git lfs install >/dev/null 2>&1 || true
+
+  # 为大文件目录添加 LFS 规则（幂等，多次运行不会重复追加）
+  if ! grep -q "checkpoints/" .gitattributes 2>/dev/null; then
+    git lfs track "checkpoints/**"
+  fi
+  if ! grep -q "norm_stats/" .gitattributes 2>/dev/null; then
+    git lfs track "norm_stats/**"
+  fi
+
+  # 确保 .gitattributes 被纳入版本控制
+  git add .gitattributes || true
+else
+  echo "[WARN] 未找到 git-lfs，checkpoint 和 norm_stats 将不会通过 LFS 管理，" \
+       "后续 git push 可能会非常慢或失败（建议安装 git-lfs）。" >&2
+fi
 
 # 组织成清晰的目录层级，方便以后在代码里引用
 CKPT_DST="checkpoints/${CONFIG_NAME}"
