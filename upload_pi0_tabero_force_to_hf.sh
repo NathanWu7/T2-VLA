@@ -32,7 +32,7 @@ EXP_NAME="force_test2"
 
 # 想要导出的 checkpoint step（子目录名），例如 "29999"。
 # 为空则导出整个实验目录（不推荐，一般只导出一个或少数几个 step）。
-CKPT_STEP="29999"
+CKPT_STEP="49999"
 
 # 训练 / 统计时用到的 repo_id（HF 数据集）
 DATA_REPO_ID="NathanWu7/tabero_force"
@@ -59,8 +59,8 @@ if ! command -v git >/dev/null 2>&1; then
   exit 1
 fi
 
-CKPT_SRC="checkpoints/${CONFIG_NAME}/${EXP_NAME}"
-NORM_SRC="assets/${CONFIG_NAME}/${DATA_REPO_ID}"
+CKPT_SRC="${ROOT_DIR}/checkpoints/${CONFIG_NAME}/${EXP_NAME}"
+NORM_SRC="${ROOT_DIR}/assets/${CONFIG_NAME}/${DATA_REPO_ID}"
 
 if [[ ! -d "${CKPT_SRC}" ]]; then
   echo "[ERROR] 找不到 checkpoint 实验目录: ${CKPT_SRC}" >&2
@@ -89,13 +89,22 @@ else
 fi
 echo "       Norm stats : ${NORM_SRC}"
 
-echo "[INFO] 清理并创建导出目录: ${EXPORT_DIR}"
+########################################
+# 创建 / 更新 HF 仓库并同步到本地
+########################################
+
+echo "[INFO] 确保 Hugging Face 仓库存在: ${HF_REPO_ID}"
+huggingface-cli repo create "${HF_REPO_ID}" --type "${HF_REPO_TYPE}" --yes || true
+
+echo "[INFO] 清理并从 Hugging Face 仓库 clone 到本地导出目录: ${EXPORT_DIR}"
 rm -rf "${EXPORT_DIR}"
-mkdir -p "${EXPORT_DIR}"
+git clone "https://huggingface.co/${HF_REPO_ID}" "${EXPORT_DIR}"
+
+cd "${EXPORT_DIR}"
 
 # 组织成清晰的目录层级，方便以后在代码里引用
-CKPT_DST="${EXPORT_DIR}/checkpoints/${CONFIG_NAME}"
-NORM_DST="${EXPORT_DIR}/norm_stats/${CONFIG_NAME}"
+CKPT_DST="checkpoints/${CONFIG_NAME}"
+NORM_DST="norm_stats/${CONFIG_NAME}"
 
 mkdir -p "${CKPT_DST}" "${NORM_DST}"
 
@@ -105,7 +114,7 @@ EXP_DST="${CKPT_DST}/${EXP_NAME}"
 mkdir -p "${EXP_DST}"
 
 if [[ -n "${CKPT_STEP}" ]]; then
-  # 仅复制指定 step
+  # 仅复制指定 step（追加到已有目录，不会删除已有 step）
   echo "[INFO] 仅复制 step=${CKPT_STEP}"
   cp -r "${CKPT_SRC}/${CKPT_STEP}" "${EXP_DST}/"
   # 如果存在 wandb_id.txt，也一并复制，方便恢复 run
@@ -121,7 +130,7 @@ echo "[INFO] 拷贝 norm_stats -> ${NORM_DST}"
 cp -r "${NORM_SRC}" "${NORM_DST}/"
 
 # 生成一个简单的 README，方便在 HF 页面查看信息
-README_PATH="${EXPORT_DIR}/README.md"
+README_PATH="README.md"
 cat > "${README_PATH}" <<EOF
 # pi0_libero_force_low_mem_finetune on NathanWu7/tabero_force
 
@@ -145,27 +154,7 @@ cat > "${README_PATH}" <<EOF
 EOF
 
 echo "[INFO] 已生成导出目录结构："
-find "${EXPORT_DIR}" -maxdepth 3 -type d | sed "s#^#  - #"
-
-########################################
-# 创建 / 更新 HF 仓库并推送
-########################################
-
-echo "[INFO] 确保 Hugging Face 仓库存在: ${HF_REPO_ID}"
-huggingface-cli repo create "${HF_REPO_ID}" --type "${HF_REPO_TYPE}" --yes || true
-
-cd "${EXPORT_DIR}"
-
-if [[ ! -d .git ]]; then
-  echo "[INFO] 初始化本地 git 仓库"
-  git init
-  git branch -M main || true
-  git remote add origin "https://huggingface.co/${HF_REPO_ID}"
-else
-  echo "[INFO] 已存在 .git，复用当前仓库"
-  git remote remove origin 2>/dev/null || true
-  git remote add origin "https://huggingface.co/${HF_REPO_ID}"
-fi
+find "." -maxdepth 3 -type d | sed "s#^#  - #"
 
 echo "[INFO] 提交并推送到 Hugging Face"
 git add .
