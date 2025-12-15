@@ -103,9 +103,10 @@ echo "[INFO] 将在端口 ${PORT} 上启动 WebSocket policy server"
 # 启动服务
 ########################
 
-uv run scripts/serve_policy.py policy:checkpoint \
+uv run scripts/serve_policy.py \
+  --port="${PORT}" \
+  policy:checkpoint \
   --policy.config="${CONFIG_NAME}" \
-  --policy.dir="${CKPT_DIR}" \
-  --port="${PORT}"
+  --policy.dir="${CKPT_DIR}"
 
 
