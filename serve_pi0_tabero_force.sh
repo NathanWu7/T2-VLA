@@ -39,9 +39,6 @@ EXP_NAME="force_test2"
 #   bash serve_pi0_tabero_force.sh 39999
 CKPT_STEP="${1:-49999}"
 
-# 服务端口，可通过环境变量 PORT 覆盖，默认 8000
-PORT="${PORT:-8000}"
-
 ########################
 # 基本检查
 ########################
@@ -97,14 +94,13 @@ fi
 
 echo "[INFO] 使用 checkpoint:"
 echo "       ${CKPT_DIR}"
-echo "[INFO] 将在端口 ${PORT} 上启动 WebSocket policy server"
+echo "[INFO] 将在端口 8000 上启动 WebSocket policy server"
 
 ########################
 # 启动服务
 ########################
 
 uv run scripts/serve_policy.py \
-  --port="${PORT}" \
   policy:checkpoint \
   --policy.config="${CONFIG_NAME}" \
   --policy.dir="${CKPT_DIR}"
