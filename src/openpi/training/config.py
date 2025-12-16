@@ -1071,7 +1071,7 @@ _CONFIGS = [
             action_horizon=10,
             discrete_state_input=False,
         ),
-        data=LeRobotLiberoNoEffortDataConfig(
+        data=LeRobotLiberoNoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
             base_config=DataConfig(
                 prompt_from_task=True,
@@ -1142,7 +1142,7 @@ _CONFIGS = [
             tactile_dim_in=8 * 6,
             tactile_in_prefix_only=True,
         ),
-        data=LeRobotLiberoEffortDataConfig(
+        data=LeRobotLiberoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
             base_config=DataConfig(
                 prompt_from_task=True,
