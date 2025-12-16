@@ -9,7 +9,7 @@ from typing_extensions import override
 from openpi.models import model as _model
 import openpi.models.gemma as _gemma
 from openpi.shared import array_typing as at
-from openpi.shared.effort_type import EffortType
+from openpi.shared.tactile_type import TactileType
 import openpi.shared.nnx_utils as nnx_utils
 
 if TYPE_CHECKING:
@@ -33,29 +33,29 @@ class Pi0Config(_model.BaseModelConfig):
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
 
-    # Effort / torque configuration (JAX-only; PyTorch side handles its own config).
-    # By default, models ignore effort.
-    effort_type: EffortType = EffortType.NO
-    # Per-timestep effort dimension (e.g., 14 for 7 joints * 2 arms), before history concatenation.
-    effort_dim: int = 14
-    # Effective input dim for the effort MLP projector. Usually effort_dim * len(effort_history).
-    # When not set explicitly (e.g., from training config + data.effort_history), we fall back to effort_dim.
-    effort_dim_in: int | None = None
+    # Tactile / torque configuration (JAX-only; PyTorch side handles its own config).
+    # By default, models ignore tactile.
+    tactile_type: TactileType = TactileType.NO
+    # Per-timestep tactile dimension (e.g., 14 for 7 joints * 2 arms), before history concatenation.
+    tactile_dim: int = 14
+    # Effective input dim for the tactile MLP projector. Usually tactile_dim * len(tactile_history).
+    # When not set explicitly (e.g., from training config + data.tactile_history), we fall back to tactile_dim.
+    tactile_dim_in: int | None = None
     # 有效的“语义 action 维度”。当数据中的 action 先 padding 到较大的 action_dim（例如 32），
     # 但真实只有前 K 维有意义时，可以把 effective_action_dim 设为 K，用于 loss 中的动作/力矩切分。
     # 默认为 action_dim，保持向后兼容。
     effective_action_dim: int | None = None
-    # Effort token 位置：默认为仅在 suffix（decoder）侧插入；
-    # 当 effort_in_prefix_only=True 时，仅在 prefix（encoder）侧插入。
-    effort_in_prefix_only: bool = False
+    # Tactile token 位置：默认为仅在 suffix（decoder）侧插入；
+    # 当 tactile_in_prefix_only=True 时，仅在 prefix（encoder）侧插入。
+    tactile_in_prefix_only: bool = False
 
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
         if self.discrete_state_input is None:
             object.__setattr__(self, "discrete_state_input", self.pi05)
-        if self.effort_dim_in is None:
-            object.__setattr__(self, "effort_dim_in", self.effort_dim)
+        if self.tactile_dim_in is None:
+            object.__setattr__(self, "tactile_dim_in", self.tactile_dim)
         if self.effective_action_dim is None:
             object.__setattr__(self, "effective_action_dim", self.action_dim)
 

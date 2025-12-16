@@ -22,7 +22,7 @@ import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
-from openpi.shared.effort_type import EffortType
+from openpi.shared.tactile_type import TactileType
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
@@ -356,12 +356,12 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
-class LeRobotLiberoEffortDataConfig(DataConfigFactory):
+class LeRobotLiberoTactileDataConfig(DataConfigFactory):
     """
-    Libero 数据配置（带 gripper_force 作为 effort）。
+    Libero 数据配置（带 gripper_force 作为 tactile）。
 
     在标准 `LeRobotLiberoDataConfig` 的基础上，将多帧 `observation/gripper_force`
-    透传到后续 policy transform，并最终映射为 `Observation.effort`。
+    透传到后续 policy transform，并最终映射为 `Observation.tactile`。
     """
 
     extra_delta_transform: bool = False
@@ -407,8 +407,79 @@ class LeRobotLiberoEffortDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
-class LeRobotLiberoNoEffortDataConfig(DataConfigFactory):
-    """Libero 数据配置（不使用 gripper_force / effort，只保留前 7 维动作）。"""
+class TaberoTacImgDataConfig(DataConfigFactory):
+    """
+    Tabero（三路图像 + 13D 动作，无 tactile）数据配置。
+
+    - 图像：observation/image, observation/wrist_image, observation/tactile_image
+      通过 TaberoTacImgInputs 映射到 3 路视觉 token。
+    - 动作：13 维（7 关节 + 6 力），经 PadStatesAndActions padding 到 32 维。
+    """
+
+    extra_delta_transform: bool = True
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # 直接使用 Tabero 的 LeRobot 格式（observation/...），不做 repack。
+        data_transforms = _transforms.Group(
+            inputs=[libero_policy.TaberoTacImgInputs(model_type=model_config.model_type)],
+            outputs=[libero_policy.LiberoForceOutputs()],
+        )
+
+        if self.extra_delta_transform:
+            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class TaberoTacFieldDataConfig(DataConfigFactory):
+    """
+    Tabero（两路图像 + 触觉力场 + 13D 动作）数据配置。
+
+    - 图像：observation/image, observation/wrist_image
+    - 触觉力场：observation/tactile_gripper_force（优先）或 observation/gripper_force
+      直接映射为 Observation.tactile，后续在模型内部 flatten+MLP 得到 tactile token。
+    """
+
+    extra_delta_transform: bool = True
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        data_transforms = _transforms.Group(
+            inputs=[libero_policy.TaberoTacFieldInputs(model_type=model_config.model_type)],
+            outputs=[libero_policy.LiberoForceOutputs()],
+        )
+
+        if self.extra_delta_transform:
+            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotLiberoNoTactileDataConfig(DataConfigFactory):
+    """Libero 数据配置（不使用 gripper_force / tactile，只保留前 7 维动作）。"""
 
     extra_delta_transform: bool = False
 
@@ -789,14 +860,76 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        name="pi0_lora_tacimg_force",
+        # 三路图像（image / wrist_image / tactile_image），13 维动作（7 关节 + 6 力），不显式使用 tactile token。
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            # 数据中真实有效动作维度为 13，其余通过 PadStatesAndActions padding。
+            effective_action_dim=13,
+            tactile_type=TactileType.NO,
+        ),
+        data=TaberoTacImgDataConfig(
+            # 你的原始 Tabero 数据集（含 tactile_image / tactile_gripper_force 等字段）。
+            repo_id="NathanWu7/tabero",
+            base_config=DataConfig(
+                # 如果在 LeRobot meta 里有 tasks 信息，可以启用从 task 里自动生成 prompt。
+                prompt_from_task=True,
+            ),
+            # 与当前 pi0_libero_force 配置保持一致，额外做一次 delta transform。
+            extra_delta_transform=True,
+        ),
+        # 使用官方 pi0 base checkpoint 初始化，再做 LoRA 微调。
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi0_base/params",
+        ),
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi0_lora_tacfield_force",
+        # 两路图像（image / wrist_image）+ 触觉力场 tactile（8×6）+ 13 维未来动作/力联合预测。
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            # 13 维 = 7 关节 + 6 力，loss 内部按 [动作, 力] 维度切分。
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=8 * 6,  # 假定 tactile_gripper_force 为 [8, 6]
+            # 只在 prefix 侧拼接 tactile token（与图像 / 语言 token 串联）。
+            tactile_in_prefix_only=True,
+        ),
+        data=TaberoTacFieldDataConfig(
+            repo_id="NathanWu7/tabero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi0_base/params",
+            # 新增的 tactile_proj_* 参数在 base checkpoint 里不存在，允许缺失。
+            missing_regex=".*",
+        ),
+        num_train_steps=50_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         name="pi0_libero_low_mem_finetune_wo_force",
         # 与 pi0_libero_low_mem_finetune 使用相同的 LoRA 配置，但在 Tabero 力矩数据上
-        # 只使用前 7 维关节动作，不使用 effort。
+        # 只使用前 7 维关节动作，不使用 tactile。
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ),
-        data=LeRobotLiberoNoEffortDataConfig(
+        data=LeRobotLiberoNoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
             base_config=DataConfig(prompt_from_task=True),
             extra_delta_transform=True,
@@ -823,11 +956,11 @@ _CONFIGS = [
             # 启用我们实现的 EXPERT_HIS_C_FUT 模式：
             # - 历史力来自 gripper_force[8,6]，flatten 后经 MLP 做 expert token；
             # - 未来动作/力直接从 actions 的 13 维中学习（前 7 维动作，后 6 维力）。
-            effort_type=EffortType.EXPERT_HIS_C_FUT,
-            effort_dim=6,
-            effort_dim_in=8 * 6,  # gripper_force 的 8 帧历史 * 6 维
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=8 * 6,  # gripper_force 的 8 帧历史 * 6 维
         ),
-        data=LeRobotLiberoEffortDataConfig(
+        data=LeRobotLiberoTactileDataConfig(
             # 使用你在 Hugging Face 上的 LeRobot 数据集仓库作为 repo_id。
             # 这里直接填 HF Hub 的 dataset id，DataLoader 会通过 fsspec 拉取数据。
             repo_id="NathanWu7/tabero_force",
@@ -841,7 +974,7 @@ _CONFIGS = [
             extra_delta_transform=True,
         ),
         # 注意：这里使用 base pi0 checkpoint 来初始化绝大部分权重，
-        # 对于新增的 effort_proj_in/effort_proj_out 这类在 checkpoint 中不存在的参数，
+        # 对于新增的 tactile_proj_in/tactile_proj_out 这类在 checkpoint 中不存在的参数，
         # 会通过 missing_regex=".*" 让它们保持模型随机初始化的值。
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi0_base/params",
@@ -931,7 +1064,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_libero_wo_force",
-        # Pi05 Tabero 数据，只使用 7 维关节动作，不读力矩（effort）。
+        # Pi05 Tabero 数据，只使用 7 维关节动作，不读触觉力（tactile）。
         # 结构上仿照 pi0_libero_low_mem_finetune_wo_force，但使用 Pi05 模型与相同 Tabero 数据。
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -962,18 +1095,18 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_libero_force_dec",
-        # Pi05 力矩（decoder 版）：8×6 effort 先 flatten→MLP→变成单个 effort token，
+        # Pi05 力矩（decoder 版）：8×6 tactile 先 flatten→MLP→变成单个 tactile token，
         # 只在 suffix（expert decoder）前拼接，和 state token + action tokens 串联。
         model=pi0_config.Pi0Config(
             pi05=True,
             action_horizon=10,
             discrete_state_input=False,
             effective_action_dim=13,
-            effort_type=EffortType.EXPERT_HIS_C_FUT,
-            effort_dim=6,
-            effort_dim_in=8 * 6,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=8 * 6,
         ),
-        data=LeRobotLiberoEffortDataConfig(
+        data=LeRobotLiberoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
             base_config=DataConfig(
                 prompt_from_task=True,
@@ -997,17 +1130,17 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_libero_force_enc",
-        # Pi05 力矩（encoder 版）：8×6 effort 先 flatten→MLP→变成单个 effort token，
+        # Pi05 力矩（encoder 版）：8×6 tactile 先 flatten→MLP→变成单个 tactile token，
         # 只在 prefix 侧与视觉 token、语言 token、state token 串联，suffix 仅看动作 + 时间。
         model=pi0_config.Pi0Config(
             pi05=True,
             action_horizon=10,
             discrete_state_input=False,
             effective_action_dim=13,
-            effort_type=EffortType.EXPERT_HIS_C_FUT,
-            effort_dim=6,
-            effort_dim_in=8 * 6,
-            effort_in_prefix_only=True,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=8 * 6,
+            tactile_in_prefix_only=True,
         ),
         data=LeRobotLiberoEffortDataConfig(
             repo_id="NathanWu7/tabero_force",

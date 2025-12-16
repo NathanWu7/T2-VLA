@@ -12,7 +12,7 @@ from openpi.models import pi0_config
 import openpi.models.gemma as _gemma
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
-from openpi.shared.effort_type import EffortType
+from openpi.shared.tactile_type import TactileType
 
 logger = logging.getLogger("openpi")
 
@@ -68,19 +68,19 @@ class Pi0(_model.BaseModel):
     def __init__(self, config: pi0_config.Pi0Config, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
-        self.effort_type = config.effort_type
-        self.effort_dim = config.effort_dim
+        self.tactile_type = config.tactile_type
+        self.tactile_dim = config.tactile_dim
         # 有效 action 维度：用于 loss 中的 [动作, 力矩] 切分。
         # 允许数据只在前 K 维有意义，其余为 padding。
         self.effective_action_dim = config.effective_action_dim
-        # 控制 effort token 只放在 prefix（encoder）还是只放在 suffix（decoder）。
-        self.effort_in_prefix_only = config.effort_in_prefix_only
+        # 控制 tactile token 只放在 prefix（encoder）还是只放在 suffix（decoder）。
+        self.tactile_in_prefix_only = config.tactile_in_prefix_only
 
-        # 仅禁止尚未实现的 EffortType 组合；允许 pi05 + EXPERT_HIS_C_FUT。
-        if self.pi05 and self.effort_type not in (EffortType.NO, EffortType.EXPERT_HIS_C_FUT):
+        # 仅禁止尚未实现的 TactileType 组合；允许 pi05 + EXPERT_HIS_C_FUT。
+        if self.pi05 and self.tactile_type not in (TactileType.NO, TactileType.EXPERT_HIS_C_FUT):
             raise ValueError(
-                f"EffortType {self.effort_type} is not supported for Pi05; "
-                "only EffortType.NO and EffortType.EXPERT_HIS_C_FUT are allowed."
+                f"TactileType {self.tactile_type} is not supported for Pi05; "
+                "only TactileType.NO and TactileType.EXPERT_HIS_C_FUT are allowed."
             )
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
@@ -105,13 +105,13 @@ class Pi0(_model.BaseModel):
         img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
 
-        # Effort projection (history encoder) — 当前仅支持 EXPERT_HIS_C_FUT 一种模式。
-        if self.effort_type is EffortType.EXPERT_HIS_C_FUT:
-            self.effort_proj_in = nnx.Linear(config.effort_dim_in, 2 * action_expert_config.width, rngs=rngs)
-            self.effort_proj_out = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
+        # Tactile projection (history encoder) — 当前仅支持 EXPERT_HIS_C_FUT 一种模式。
+        if self.tactile_type is TactileType.EXPERT_HIS_C_FUT:
+            self.tactile_proj_in = nnx.Linear(config.tactile_dim_in, 2 * action_expert_config.width, rngs=rngs)
+            self.tactile_proj_out = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
         else:
-            self.effort_proj_in = None
-            self.effort_proj_out = None
+            self.tactile_proj_in = None
+            self.tactile_proj_out = None
 
         # Action / time path.
         if config.pi05:
@@ -133,43 +133,43 @@ class Pi0(_model.BaseModel):
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
-    def _project_effort(self, effort: at.Float[at.Array, "b *d"]) -> at.Float[at.Array, "b emb"]:
-        if self.effort_proj_in is None or self.effort_proj_out is None:
-            raise ValueError("Effort projection is not initialized but was called.")
-        effort_hidden = self.effort_proj_in(effort)
-        effort_hidden = nnx.swish(effort_hidden)
-        return self.effort_proj_out(effort_hidden)
+    def _project_tactile(self, tactile: at.Float[at.Array, "b *d"]) -> at.Float[at.Array, "b emb"]:
+        if self.tactile_proj_in is None or self.tactile_proj_out is None:
+            raise ValueError("Tactile projection is not initialized but was called.")
+        tactile_hidden = self.tactile_proj_in(tactile)
+        tactile_hidden = nnx.swish(tactile_hidden)
+        return self.tactile_proj_out(tactile_hidden)
 
-    def _process_effort_tokens(
+    def _process_tactile_tokens(
         self, obs: _model.Observation, mode: str
     ) -> tuple[list[jax.Array], list[jax.Array], list[bool]]:
-        """Build effort tokens for either the LLM prefix or expert suffix."""
+        """Build tactile tokens for either the LLM prefix or expert suffix."""
         tokens_list: list[jax.Array] = []
         input_mask_list: list[jax.Array] = []
         ar_mask_list: list[bool] = []
 
-        if obs.effort is None or self.effort_type is EffortType.NO:
+        if obs.tactile is None or self.tactile_type is TactileType.NO:
             return tokens_list, input_mask_list, ar_mask_list
 
         # suffix tokens will not be attended by postfix tokens
         ar_mask_value = mode == "suffix"
 
-        if self.effort_type is EffortType.EXPERT_HIS_C_FUT:
-            # decoder 版本（默认）：只在 suffix 前加 effort token。
-            use_in_suffix = mode == "suffix" and not self.effort_in_prefix_only
-            # encoder 版本：只在 prefix 里加 effort token。
-            use_in_prefix = mode == "prefix" and self.effort_in_prefix_only
+        if self.tactile_type is TactileType.EXPERT_HIS_C_FUT:
+            # decoder 版本（默认）：只在 suffix 前加 tactile token。
+            use_in_suffix = mode == "suffix" and not self.tactile_in_prefix_only
+            # encoder 版本：只在 prefix 里加 tactile token。
+            use_in_prefix = mode == "prefix" and self.tactile_in_prefix_only
 
             if use_in_suffix or use_in_prefix:
-                # 将多帧历史 effort concat 成一个向量，作为单个 expert / conditioning token。
-                if obs.effort.ndim == obs.state.ndim + 1:
-                    batch_size, _, _ = obs.effort.shape
-                    effort_flat = obs.effort.reshape(batch_size, -1)
+                # 将多帧历史 tactile concat 成一个向量，作为单个 expert / conditioning token。
+                if obs.tactile.ndim == obs.state.ndim + 1:
+                    batch_size, _, _ = obs.tactile.shape
+                    tactile_flat = obs.tactile.reshape(batch_size, -1)
                 else:
-                    effort_flat = obs.effort
-                effort_token = self._project_effort(effort_flat)[:, None, :]
-                tokens_list.append(effort_token)
-                input_mask_list.append(jnp.ones(effort_token.shape[:2], dtype=jnp.bool_))
+                    tactile_flat = obs.tactile
+                tactile_token = self._project_tactile(tactile_flat)[:, None, :]
+                tokens_list.append(tactile_token)
+                input_mask_list.append(jnp.ones(tactile_token.shape[:2], dtype=jnp.bool_))
                 ar_mask_list.append(ar_mask_value)
 
         return tokens_list, input_mask_list, ar_mask_list
@@ -204,11 +204,11 @@ class Pi0(_model.BaseModel):
             # full attention between image and language inputs
             ar_mask += [False] * tokenized_inputs.shape[1]
 
-        # add effort tokens to LLM prefix if requested
-        effort_tokens, effort_input_mask, effort_ar_mask = self._process_effort_tokens(obs, mode="prefix")
-        tokens.extend(effort_tokens)
-        input_mask.extend(effort_input_mask)
-        ar_mask.extend(effort_ar_mask)
+        # add tactile tokens to LLM prefix if requested
+        tactile_tokens, tactile_input_mask, tactile_ar_mask = self._process_tactile_tokens(obs, mode="prefix")
+        tokens.extend(tactile_tokens)
+        input_mask.extend(tactile_input_mask)
+        ar_mask.extend(tactile_ar_mask)
 
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
@@ -228,11 +228,11 @@ class Pi0(_model.BaseModel):
         ar_mask = []
         tokens = []
 
-        # 可选：在 expert suffix 前添加 effort token（Pi0 与 Pi05 共享逻辑）。
-        effort_tokens, effort_input_mask, effort_ar_mask = self._process_effort_tokens(obs, mode="suffix")
-        tokens.extend(effort_tokens)
-        input_mask.extend(effort_input_mask)
-        ar_mask.extend(effort_ar_mask)
+        # 可选：在 expert suffix 前添加 tactile token（Pi0 与 Pi05 共享逻辑）。
+        tactile_tokens, tactile_input_mask, tactile_ar_mask = self._process_tactile_tokens(obs, mode="suffix")
+        tokens.extend(tactile_tokens)
+        input_mask.extend(tactile_input_mask)
+        ar_mask.extend(tactile_ar_mask)
 
         if not self.pi05:
             # 仅对标准 Pi0 添加显式 state token；Pi05 使用离散 state 编码，不再需要此 token。
@@ -281,7 +281,7 @@ class Pi0(_model.BaseModel):
             preprocess_rng,
             observation,
             train=train,
-            effort_type=self.effort_type,
+            tactile_type=self.tactile_type,
         )
 
         batch_shape = actions.shape[:-2]
@@ -303,26 +303,26 @@ class Pi0(_model.BaseModel):
         )
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
-        if self.effort_type is EffortType.EXPERT_HIS_C_FUT:
-            # EXPERT_HIS_C_FUT（方案 B）：actions 本身已经包含 [动作, 力]。
-            # 约定：在“有效 action 维度” effective_action_dim 内，前 (effective_action_dim - effort_dim) 维是动作，
-            # 随后的 effort_dim 维是力矩，其后的维度（如果有）视为 padding，并且在 loss 中完全忽略。
+        if self.tactile_type is TactileType.EXPERT_HIS_C_FUT:
+            # EXPERT_HIS_C_FUT（方案 B）：actions 本身已经包含 [动作, 触觉力]。
+            # 约定：在“有效 action 维度” effective_action_dim 内，前 (effective_action_dim - tactile_dim) 维是动作，
+            # 随后的 tactile_dim 维是触觉力，其后的维度（如果有）视为 padding，并且在 loss 中完全忽略。
             effective_ad = self.effective_action_dim
-            ctrl_dim = effective_ad - self.effort_dim
+            ctrl_dim = effective_ad - self.tactile_dim
             if ctrl_dim <= 0:
                 raise ValueError(
                     "EXPERT_HIS_C_FUT requires effective_action_dim "
-                    f"({effective_ad}) > effort_dim ({self.effort_dim})."
+                    f"({effective_ad}) > tactile_dim ({self.tactile_dim})."
                 )
             # 动作损失：只在前 ctrl_dim 维计算（例如 7 个关节）。
             action_loss = jnp.mean(jnp.square(v_t[..., :ctrl_dim] - u_t[..., :ctrl_dim]), axis=-1)
-            # 力矩损失：紧接着的 effort_dim 维（例如第 8–13 维），其余 padding 维度忽略。
-            effort_slice = slice(ctrl_dim, ctrl_dim + self.effort_dim)
-            effort_loss = jnp.mean(
-                jnp.square(v_t[..., effort_slice] - u_t[..., effort_slice]),
+            # 触觉力损失：紧接着的 tactile_dim 维（例如第 8–13 维），其余 padding 维度忽略。
+            tactile_slice = slice(ctrl_dim, ctrl_dim + self.tactile_dim)
+            tactile_loss = jnp.mean(
+                jnp.square(v_t[..., tactile_slice] - u_t[..., tactile_slice]),
                 axis=-1,
             )
-            return action_loss + 0.1 * effort_loss
+            return action_loss + 0.1 * tactile_loss
 
         return jnp.mean(jnp.square(v_t - u_t), axis=-1)
 
@@ -339,7 +339,7 @@ class Pi0(_model.BaseModel):
             None,
             observation,
             train=False,
-            effort_type=self.effort_type,
+            tactile_type=self.tactile_type,
         )
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.

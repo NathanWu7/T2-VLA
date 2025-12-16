@@ -45,6 +45,7 @@ class LiberoInputs(transforms.DataTransformFn):
         # Keep this for your own dataset, but if your dataset stores the images
         # in a different key than "observation/image" or "observation/wrist_image",
         # you should change it below.
+        #
         # Pi0 models support three image inputs at the moment: one third-person view,
         # and two wrist views (left and right). If your dataset does not have a particular type
         # of image, e.g. wrist images, you can comment it out here and replace it with zeros like we do for the
@@ -52,28 +53,39 @@ class LiberoInputs(transforms.DataTransformFn):
         base_image = _parse_image(data["observation/image"])
         wrist_image = _parse_image(data["observation/wrist_image"])
 
+        # Optional: third camera (e.g., tactile image) mapped to the "right wrist" slot.
+        # If not provided, we fall back to zeros like the original LiberoInputs.
+        if "observation/tactile_image" in data:
+            right_image = _parse_image(data["observation/tactile_image"])
+            right_mask = np.True_
+        else:
+            right_image = np.zeros_like(base_image)
+            # We only mask padding images for pi0 model, not pi0-FAST. Do not change this for your own dataset.
+            right_mask = np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_
+
         # Create inputs dict. Do not change the keys in the dict below.
         inputs = {
             "state": data["observation/state"],
             "image": {
                 "base_0_rgb": base_image,
                 "left_wrist_0_rgb": wrist_image,
-                # Pad any non-existent images with zero-arrays of the appropriate shape.
-                "right_wrist_0_rgb": np.zeros_like(base_image),
+                # Either real third view (e.g. tactile image) or zero padding.
+                "right_wrist_0_rgb": right_image,
             },
             "image_mask": {
                 "base_0_rgb": np.True_,
                 "left_wrist_0_rgb": np.True_,
-                # We only mask padding images for pi0 model, not pi0-FAST. Do not change this for your own dataset.
-                "right_wrist_0_rgb": np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_,
+                "right_wrist_0_rgb": right_mask,
             },
         }
 
-        # Optional: multi-frame gripper force as effort / torque input.
+        # Optional: multi-frame gripper / tactile force as tactile / torque input.
         # For your own dataset, if you store a window of gripper forces under a different key,
-        # map it to "observation/gripper_force" in the repack transform, and it will appear here.
+        # map it to one of the keys below in the repack transform, and it will appear here.
         if "observation/gripper_force" in data:
-            inputs["effort"] = data["observation/gripper_force"]
+            inputs["tactile"] = data["observation/gripper_force"]
+        elif "observation/tactile_gripper_force" in data:
+            inputs["tactile"] = data["observation/tactile_gripper_force"]
 
         # Pad actions to the model action dimension. Keep this for your own dataset.
         # Actions are only available during training.
@@ -83,6 +95,101 @@ class LiberoInputs(transforms.DataTransformFn):
         # Pass the prompt (aka language instruction) to the model.
         # Keep this for your own dataset (but modify the key if the instruction is not
         # stored in "prompt"; the output dict always needs to have the key "prompt").
+        if "prompt" in data:
+            inputs["prompt"] = data["prompt"]
+
+        return inputs
+
+
+@dataclasses.dataclass(frozen=True)
+class TaberoTacImgInputs(transforms.DataTransformFn):
+    """
+    Tabero 输入（3 路图像 + 13 维动作，不使用触觉力场 / tactile）。
+
+    - 图像：
+        - observation/image          -> base_0_rgb
+        - observation/wrist_image    -> left_wrist_0_rgb
+        - observation/tactile_image  -> right_wrist_0_rgb
+    - 动作：
+        - actions                    -> 13 维（7 关节 + 6 力），在后续 PadStatesAndActions 中 padding 到 32 维。
+    """
+
+    model_type: _model.ModelType
+
+    def __call__(self, data: dict) -> dict:
+        base_image = _parse_image(data["observation/image"])
+        wrist_image = _parse_image(data["observation/wrist_image"])
+        tactile_image = _parse_image(data["observation/tactile_image"])
+
+        inputs = {
+            "state": data["observation/state"],
+            "image": {
+                "base_0_rgb": base_image,
+                "left_wrist_0_rgb": wrist_image,
+                "right_wrist_0_rgb": tactile_image,
+            },
+            "image_mask": {
+                "base_0_rgb": np.True_,
+                "left_wrist_0_rgb": np.True_,
+                "right_wrist_0_rgb": np.True_,
+            },
+        }
+
+        if "actions" in data:
+            inputs["actions"] = data["actions"]
+        if "prompt" in data:
+            inputs["prompt"] = data["prompt"]
+
+        # 明确：不读取任何 gripper_force / tactile_gripper_force，tactile 为空。
+        return inputs
+
+
+@dataclasses.dataclass(frozen=True)
+class TaberoTacFieldInputs(transforms.DataTransformFn):
+    """
+    Tabero 输入（2 路图像 + 触觉力场 tactile + 13 维动作）。
+
+    - 图像：
+        - observation/image          -> base_0_rgb
+        - observation/wrist_image    -> left_wrist_0_rgb
+        - 第三路视觉留空，用零图 + mask=False（与原始 LiberoInputs 一致）
+    - 力场：
+        - observation/tactile_gripper_force (优先)
+        - 或 observation/gripper_force（兼容旧命名）
+      直接作为 Observation.tactile（形状 [B, N, 6]），在模型内部 flatten + MLP 得到 tactile token。
+    """
+
+    model_type: _model.ModelType
+
+    def __call__(self, data: dict) -> dict:
+        base_image = _parse_image(data["observation/image"])
+        wrist_image = _parse_image(data["observation/wrist_image"])
+
+        right_image = np.zeros_like(base_image)
+        right_mask = np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_
+
+        inputs = {
+            "state": data["observation/state"],
+            "image": {
+                "base_0_rgb": base_image,
+                "left_wrist_0_rgb": wrist_image,
+                "right_wrist_0_rgb": right_image,
+            },
+            "image_mask": {
+                "base_0_rgb": np.True_,
+                "left_wrist_0_rgb": np.True_,
+                "right_wrist_0_rgb": right_mask,
+            },
+        }
+
+        # 触觉力场作为 tactile。
+        if "observation/tactile_gripper_force" in data:
+            inputs["tactile"] = data["observation/tactile_gripper_force"]
+        elif "observation/gripper_force" in data:
+            inputs["tactile"] = data["observation/gripper_force"]
+
+        if "actions" in data:
+            inputs["actions"] = data["actions"]
         if "prompt" in data:
             inputs["prompt"] = data["prompt"]
 

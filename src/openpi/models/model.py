@@ -19,7 +19,7 @@ import torch
 
 from openpi.models_pytorch import pi0_pytorch
 from openpi.shared import image_tools
-from openpi.shared.effort_type import EffortType
+from openpi.shared.tactile_type import TactileType
 import openpi.shared.array_typing as at
 
 logger = logging.getLogger("openpi")
@@ -65,7 +65,7 @@ IMAGE_RESOLUTION = (224, 224)
 #         ...  # Masks for additional views
 #     },
 #     "state": float32[*b, s],  # Low-dimensional robot state
-#     "effort": float32[*b, n, e],  # Optional, effort / torque history (n frames, e dims)
+#     "tactile": float32[*b, n, e],  # Optional, tactile / torque history (n frames, e dims)
 #     "tokenized_prompt": int32[*b, l],  # Optional, tokenized language prompt
 #     "tokenized_prompt_mask": bool[*b, l],  # Optional, mask for tokenized prompt
 #     "token_ar_mask": int32[*b, l],  # Optional, autoregressive mask for FAST model
@@ -95,9 +95,9 @@ class Observation(Generic[ArrayT]):
     image_masks: dict[str, at.Bool[ArrayT, "*b"]]
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "*b s"]
-    # Effort / joint torque history. Shape convention: [*b, n, e].
-    # When effort is not used, this is None and the model ignores it.
-    effort: at.Float[ArrayT, "*b n e"] | None = None
+    # Tactile / joint torque history. Shape convention: [*b, n, e].
+    # When tactile is not used, this is None and the model ignores it.
+    tactile: at.Float[ArrayT, "*b n e"] | None = None
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
@@ -127,7 +127,7 @@ class Observation(Generic[ArrayT]):
             images=data["image"],
             image_masks=data["image_mask"],
             state=data["state"],
-            effort=data.get("effort"),
+            tactile=data.get("tactile"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -154,7 +154,7 @@ def preprocess_observation(
     train: bool = False,
     image_keys: Sequence[str] = IMAGE_KEYS,
     image_resolution: tuple[int, int] = IMAGE_RESOLUTION,
-    effort_type: EffortType = EffortType.NO,
+    tactile_type: TactileType = TactileType.NO,
 ) -> Observation:
     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
     filling in a default image mask (if necessary).
@@ -204,19 +204,19 @@ def preprocess_observation(
         else:
             out_masks[key] = jnp.asarray(observation.image_masks[key])
 
-    # Handle effort according to EffortType to produce the state/effort fields seen by the model.
+    # Handle tactile according to TactileType to produce the state/tactile fields seen by the model.
     state = observation.state
-    effort = observation.effort
+    tactile = observation.tactile
 
-    if effort is not None and effort_type is EffortType.NO:
-        # 模型完全忽略 effort。
-        effort = None
+    if tactile is not None and tactile_type is TactileType.NO:
+        # 模型完全忽略 tactile。
+        tactile = None
 
     return Observation(
         images=out_images,
         image_masks=out_masks,
         state=state,
-        effort=effort,
+        tactile=tactile,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
@@ -345,4 +345,23 @@ def restore_params(
     flat_params = traverse_util.flatten_dict(params)
     if all(kp[-1] == "value" for kp in flat_params):
         flat_params = {kp[:-1]: v for kp, v in flat_params.items()}
+
+    # Backwards compatibility: migrate old effort_* parameter names to tactile_*.
+    migrated_flat_params: dict = {}
+    has_effort = False
+    for kp, v in flat_params.items():
+        path_str = "/".join(kp)
+        new_path_str = path_str
+        if "effort_proj_in" in path_str or "effort_proj_out" in path_str:
+            has_effort = True
+            new_path_str = (
+                new_path_str.replace("effort_proj_in", "tactile_proj_in")
+                .replace("effort_proj_out", "tactile_proj_out")
+            )
+        new_kp = tuple(new_path_str.split("/"))
+        migrated_flat_params[new_kp] = v
+
+    if has_effort:
+        flat_params = migrated_flat_params
+
     return traverse_util.unflatten_dict(flat_params)
