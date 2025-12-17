@@ -115,7 +115,7 @@ class TactileTCNEncoder(nnx.Module):
         emb_dim: int,
         has_reference_frame: bool,
         diff_from_reference: bool,
-        num_layers: int = 2,
+        num_layers: int = 1,
         kernel_size: int = 3,
         rngs: Optional[nnx.Rngs] = None,
     ):
@@ -251,7 +251,8 @@ def create_tactile_encoder(
         return TactileTCNEncoder(
             in_dim=per_step_dim,
             history_len=tactile_history,
-            hidden_dim=2 * expert_width,
+            # 轻量版 TCN：hidden_dim 减半为 expert_width，并只保留 1 层。
+            hidden_dim=expert_width,
             emb_dim=expert_width,
             has_reference_frame=has_reference_frame,
             diff_from_reference=diff_from_reference,
