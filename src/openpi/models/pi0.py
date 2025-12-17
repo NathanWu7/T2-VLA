@@ -339,14 +339,6 @@ class Pi0(_model.BaseModel):
                 axis=-1,
             )
 
-            # 仅在训练模式下，单独 log action_loss / tactile_loss 的 batch 均值，方便排查数值问题。
-            if train:
-                jax.debug.print(
-                    "Pi0 loss components (batch mean): action_loss={action_loss:.6f}, tactile_loss={tactile_loss:.6f}",
-                    action_loss=jnp.mean(action_loss),
-                    tactile_loss=jnp.mean(tactile_loss),
-                )
-
             total_loss = action_loss + self.tactile_loss_weight * tactile_loss
             if return_components:
                 return total_loss, {"action_loss": action_loss, "tactile_loss": tactile_loss}
