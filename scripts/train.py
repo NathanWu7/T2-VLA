@@ -149,13 +149,9 @@ def train_step(
     def loss_fn(
         model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
     ):
-        # 默认：只返回总 loss，action_loss / tactile_loss 置零占位，保证日志树结构一致。
-        chunked_loss = None
-        action_loss_mean = jnp.array(0.0, dtype=jnp.float32)
-        tactile_loss_mean = jnp.array(0.0, dtype=jnp.float32)
-
         if isinstance(model, Pi0) and getattr(model, "tactile_type", None) is TactileType.EXPERT_HIS_C_FUT:
-            # Pi0 + EXPERT_HIS_C_FUT：要求模型同时返回分量 loss。
+            # Pi0 + EXPERT_HIS_C_FUT：模型返回总 loss 以及已经聚合好的
+            # action_loss / tactile_loss scalar，方便 wandb 记录且避免额外的张量开销。
             chunked_loss, components = model.compute_loss(
                 rng,
                 observation,
@@ -163,10 +159,12 @@ def train_step(
                 train=True,
                 return_components=True,
             )
-            action_loss_mean = jnp.mean(components["action_loss"])
-            tactile_loss_mean = jnp.mean(components["tactile_loss"])
+            action_loss_mean = components["action_loss"]
+            tactile_loss_mean = components["tactile_loss"]
         else:
             chunked_loss = model.compute_loss(rng, observation, actions, train=True)
+            action_loss_mean = jnp.array(0.0, dtype=jnp.float32)
+            tactile_loss_mean = jnp.array(0.0, dtype=jnp.float32)
 
         total_loss = jnp.mean(chunked_loss)
         aux = {

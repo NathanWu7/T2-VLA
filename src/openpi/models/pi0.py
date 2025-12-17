@@ -341,7 +341,14 @@ class Pi0(_model.BaseModel):
 
             total_loss = action_loss + self.tactile_loss_weight * tactile_loss
             if return_components:
-                return total_loss, {"action_loss": action_loss, "tactile_loss": tactile_loss}
+                # 为了减小 aux 体积，仅返回 batch+time 维度上聚合后的 scalar 分量，
+                # 避免在训练循环中携带完整 [*b, ah] 张量，减少内存与通信开销。
+                action_loss_mean = jnp.mean(action_loss)
+                tactile_loss_mean = jnp.mean(tactile_loss)
+                return total_loss, {
+                    "action_loss": action_loss_mean,
+                    "tactile_loss": tactile_loss_mean,
+                }
             return total_loss
 
         total_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
