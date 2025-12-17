@@ -284,6 +284,58 @@ class TaberoTacForceInputs(transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class TaberoNoTactInputs(transforms.DataTransformFn):
+    """
+    Tabero 输入（只用 2 路图像 + state + 动作，不使用任何 tactile / 力）。
+
+    - 图像：
+        - Tabero v2.1 扁平格式：
+            - image                  -> base_0_rgb
+            - wrist_image            -> left_wrist_0_rgb
+          第三路视觉留空，用零图 + mask=False（与原始 LiberoInputs 一致）
+        - 兼容旧格式：observation/image, observation/wrist_image
+    - 不读取任何 tactile_gripper_force / tactile_marker_motion / gripper_force。
+    """
+
+    model_type: _model.ModelType
+
+    def __call__(self, data: dict) -> dict:
+        # 支持 Tabero v2.1 扁平格式和旧的 observation/... 格式。
+        if "image" in data:
+            base_image = _parse_image(data["image"])
+            wrist_image = _parse_image(data["wrist_image"])
+            state = data["state"]
+        else:
+            base_image = _parse_image(data["observation/image"])
+            wrist_image = _parse_image(data["observation/wrist_image"])
+            state = data["observation/state"]
+
+        right_image = np.zeros_like(base_image)
+        right_mask = np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_
+
+        inputs = {
+            "state": state,
+            "image": {
+                "base_0_rgb": base_image,
+                "left_wrist_0_rgb": wrist_image,
+                "right_wrist_0_rgb": right_image,
+            },
+            "image_mask": {
+                "base_0_rgb": np.True_,
+                "left_wrist_0_rgb": np.True_,
+                "right_wrist_0_rgb": right_mask,
+            },
+        }
+
+        if "actions" in data:
+            inputs["actions"] = data["actions"]
+        if "prompt" in data:
+            inputs["prompt"] = data["prompt"]
+
+        return inputs
+
+
+@dataclasses.dataclass(frozen=True)
 class LiberoOutputs(transforms.DataTransformFn):
     """
     This class is used to convert outputs from the model back the the dataset specific format. It is

@@ -30,6 +30,11 @@ import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
 ModelType: TypeAlias = _model.ModelType
+
+# 全局触觉 / 力 loss 权重（用于 EXPRT_HIS_C_FUT：total_loss = action_loss + w * tactile_loss）
+TACTILE_LOSS_WEIGHT: float = 0.1
+# Tabero / 力矩相关实验使用的统一 tactile 历史长度（单位：帧数）。
+TABERO_TACTILE_HISTORY: int = 8
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
 Filter: TypeAlias = nnx.filterlib.Filter
 
@@ -498,6 +503,47 @@ class TaberoTacForceDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class TaberoNoTactNoForceDataConfig(DataConfigFactory):
+    """
+    Tabero（多路图像 + 只用 7D 关节动作，不使用任何 tactile / 指力）的数据配置。
+
+    - 图像：image, wrist_image, tactile_image（第三路当作普通视觉使用）
+    - 动作：原始 13D（7 关节 + 6 力）在这里通过 SliceActions(7) 截断为 7D，只训练关节，
+      后 6 维力完全从 loss 中“屏蔽掉”，行为与原始 pi0_libero_wo_force 类似。
+    """
+
+    extra_delta_transform: bool = True
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        data_transforms = _transforms.Group(
+            inputs=[
+                # 只用两路图像（image / wrist_image）+ state + 13D actions，从 Tabero v2.1 扁平格式读入，
+                # 不读取 tactile_image / tactile_force 等任何触觉模态。
+                libero_policy.TaberoNoTactInputs(model_type=model_config.model_type),
+                # 将动作截断为前 7 维（关节），彻底丢弃后 6 维指力。
+                _transforms.SliceActions(7),
+            ],
+            outputs=[libero_policy.LiberoOutputs()],
+        )
+
+        if self.extra_delta_transform:
+            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class LeRobotLiberoNoTactileDataConfig(DataConfigFactory):
     """Libero 数据配置（不使用 gripper_force / tactile，只保留前 7 维动作）。"""
 
@@ -859,28 +905,7 @@ _CONFIGS = [
         num_train_steps=30_000,
     ),
     TrainConfig(
-        name="pi0_libero_low_mem_finetune",
-        # Here is an example of loading a pi0 model for LoRA fine-tuning.
-        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
-        data=LeRobotLiberoDataConfig(
-            repo_id="physical-intelligence/libero",
-            base_config=DataConfig(prompt_from_task=True),
-            extra_delta_transform=True,
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
-        num_train_steps=30_000,
-        # The freeze filter defines which parameters should be frozen during training.
-        # We have a convenience function in the model config that returns the default freeze filter
-        # for the given model config for LoRA finetuning. Just make sure it matches the model config
-        # you chose above.
-        freeze_filter=pi0_config.Pi0Config(
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
-        ).get_freeze_filter(),
-        # Turn off EMA for LoRA finetuning.
-        ema_decay=None,
-    ),
-    TrainConfig(
-        name="pi0_lora_tacimg_force",
+        name="pi0_lora_tacimg_tabero",
         # 三路图像（image / wrist_image / tactile_image），13 维动作（7 关节 + 6 力），
         # 不使用历史 tactile token，但在 loss 里仍对 [关节 vs 力] 做加权（0.1 * tactile_loss）。
         model=pi0_config.Pi0Config(
@@ -895,6 +920,7 @@ _CONFIGS = [
             # tactile_dim_in=0 表示不需要 tactile token 的 Linear 投影，只启用 loss 拆分逻辑，
             # 既避免引入新的权重，又保持和原有 checkpoint 的结构兼容。
             tactile_dim_in=0,
+            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         data=TaberoTacImgDataConfig(
             # 你的原始 Tabero 数据集（含 tactile_image / tactile_gripper_force 等字段）。
@@ -905,6 +931,10 @@ _CONFIGS = [
             ),
             # 与当前 pi0_libero_force 配置保持一致，额外做一次 delta transform。
             extra_delta_transform=True,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=1.25e-5,
+            decay_lr=1.25e-6,
         ),
         # 使用官方 pi0 base checkpoint 初始化，再做 LoRA 微调。
         weight_loader=weight_loaders.CheckpointWeightLoader(
@@ -917,7 +947,45 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi0_lora_tacfield_force",
+        name="pi0_lora_notac_tabero",
+        # Tabero 基线：使用三路图像（image / wrist_image / tactile_image）作为纯视觉输入，
+        # 只训练前 7 维关节动作，不使用任何 tactile token，也不对后 6 维指力做监督。
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            # 使用与 force 版相同的 EXPERT_HIS_C_FUT loss 拆分逻辑，但关闭力的监督：
+            # - effective_action_dim=13：前 7 维是真实关节动作，后 6 维作为“力槽位”；
+            # - tactile_type=EXPERT_HIS_C_FUT：在 compute_loss 中按 [7 动作 + 6 力] 拆分；
+            # - tactile_dim_in=0：不创建 tactile token 相关 Linear，只启用 loss 拆分逻辑；
+            # - tactile_loss_weight=0.0：力的 loss 权重为 0，只剩 7 维动作 loss。
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_loss_weight=0.0,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=1.25e-5,
+            decay_lr=1.25e-6,
+        ),
+        data=TaberoNoTactNoForceDataConfig(
+            repo_id="NathanWu7/tabero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi0_base/params",
+        ),
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi0_lora_tacfield_tabero",
         # 两路图像（image / wrist_image）+ 触觉力场 tactile（8×6）+ 13 维未来动作/力联合预测。
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
@@ -926,12 +994,27 @@ _CONFIGS = [
             effective_action_dim=13,
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
-            # Tabero 力场：tactile_marker_motion 形状约为 [9, 198, 2]，
-            # 在 TaberoTacFieldInputs 中先 reshape 成 [9, 198*2]，然后在模型内部整体 flatten，
-            # 因此这里的输入维度设置为 9 * 198 * 2。
+            # Tabero 力场：tactile_marker_motion 形状为 [9, 198, 2]，
+            # 在 TaberoTacFieldInputs 中先 reshape 成 [9, 198*2]，然后在模型内部使用 TCN：
+            # - 第 1 帧作为“基准帧”（无接触）；
+            # - 后 8 帧每一帧都减去基准帧，形成 8 帧历史；
+            # - 因此 tactile_dim_in 仍然是 9 * 198 * 2（1+8 帧），但 history=TABERO_TACTILE_HISTORY。
             tactile_dim_in=9 * 198 * 2,
-            # 只在 prefix 侧拼接 tactile token（与图像 / 语言 token 串联）。
+            # 历史长度 H：TABERO_TACTILE_HISTORY 帧接触历史（例如 8），
+            # 但在 full-seq 模式下实际 TCN 序列长度为 1+H（基准 + 历史），仍使用 H 作为超参。
+            tactile_history=TABERO_TACTILE_HISTORY,
+            # 使用 TCN（时序卷积网络）作为 marker motion 的 tactile tokenizer，
+            # 且直接使用 [基准 + 8 帧接触] 共 9 帧做 TCN，不做差分；
+            # 通过 tactile_diff_from_reference 可切换回“差分版”。
+            tactile_encoder_type="tcn",
+            tactile_use_reference_frame=True,
+            tactile_diff_from_reference=False,
             tactile_in_prefix_only=True,
+            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=1.25e-5,
+            decay_lr=1.25e-6,
         ),
         data=TaberoTacFieldDataConfig(
             repo_id="NathanWu7/tabero",
@@ -945,14 +1028,14 @@ _CONFIGS = [
             # 新增的 tactile_proj_* 参数在 base checkpoint 里不存在，允许缺失。
             missing_regex=".*",
         ),
-        num_train_steps=50_000,
+        num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi0_lora_tacforce_force",
+        name="pi0_lora_tacforce_tabero",
         # 两路图像（image / wrist_image）+ 8×6 指力历史 tactile + 13 维未来动作/力联合预测。
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
@@ -963,9 +1046,16 @@ _CONFIGS = [
             tactile_dim=6,
             # 指力历史：tactile_gripper_force 形状约为 [8, 6]，在模型内部 flatten 成 8*6。
             tactile_dim_in=8 * 6,
+            # 显式设定历史长度为 TABERO_TACTILE_HISTORY（无显式基准帧，仅时间窗长度）。
+            tactile_history=TABERO_TACTILE_HISTORY,
             # tacforce：默认只在 decoder/suffix 侧注入 tactile token（历史指力），
             # prefix 侧只包含视觉 + 语言。
             tactile_in_prefix_only=False,
+            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=1.25e-5,
+            decay_lr=1.25e-6,
         ),
         data=TaberoTacForceDataConfig(
             repo_id="NathanWu7/tabero",
@@ -978,19 +1068,33 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi0_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=50_000,
+        num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi0_libero_low_mem_finetune_wo_force",
+        name="pi0_lora_noforce_taforce",
         # 与 pi0_libero_low_mem_finetune 使用相同的 LoRA 配置，但在 Tabero 力矩数据上
         # 只使用前 7 维关节动作，不使用 tactile。
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
+            # 使用与 force 版相同的 EXPERT_HIS_C_FUT loss 拆分逻辑，但关闭力的监督：
+            # - effective_action_dim=13：前 7 维是真实关节动作，后 6 维作为“力槽位”；
+            # - tactile_type=EXPERT_HIS_C_FUT：在 compute_loss 中按 [7 动作 + 6 力] 拆分；
+            # - tactile_dim_in=0：不创建 tactile token 相关 Linear，只启用 loss 拆分逻辑；
+            # - tactile_loss_weight=0.0：力的 loss 权重为 0，只剩 7 维动作 loss。
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_loss_weight=0.0,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=1.25e-5,
+            decay_lr=1.25e-6,
         ),
         data=LeRobotLiberoNoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
@@ -1005,7 +1109,7 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi0_libero_force_low_mem_finetune",
+        name="pi0_lora_force_taforce",
         # 带力矩历史 + 未来动作/力联合预测的 LoRA 微调配置。
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
@@ -1022,6 +1126,13 @@ _CONFIGS = [
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
             tactile_dim_in=8 * 6,  # gripper_force 的 8 帧历史 * 6 维
+            tactile_history=TABERO_TACTILE_HISTORY,
+            # 力 / 触觉 loss 的权重，可以在这里直接修改（默认 0.1）。
+            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=1.25e-5,
+            decay_lr=1.25e-6,
         ),
         data=LeRobotLiberoTactileDataConfig(
             # 使用你在 Hugging Face 上的 LeRobot 数据集仓库作为 repo_id。
@@ -1043,67 +1154,15 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi0_base/params",
             missing_regex=".*",
         ),
-        # data=LeRobotLiberoDataConfig(
-        #     repo_id="/home/qiweiw/gitlabs/TacManip/benchmarks/datasets/pi0/lerobot_all_libero_suites",
-        #     assets=AssetsConfig(
-        #         assets_dir="/home/qiweiw/gitlabs/TacManip/benchmarks/datasets/pi0",
-        #         asset_id="lerobot_all_libero_suites"
-        #     ),
-        #     base_config=DataConfig(prompt_from_task=True),
-        #     extra_delta_transform=True,
-        # ),
         # 初始权重：使用官方 pi0 base checkpoint，然后做 LoRA 微调。
         # 其余设置与上方 pi0_libero_low_mem_finetune 保持一致。
-        num_train_steps=50_000,
+        num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
         ema_decay=None,
     ),
-    TrainConfig(
-        name="pi0_fast_libero",
-        # Here is an example of loading a pi0-FAST model for full finetuning.
-        # Modify action_dim and action_horizon to match your dataset (action horizon is equal to
-        # the desired action chunk length).
-        # The max_token_len is the maximum number of (non-image) tokens the model can handle.
-        # This includes the tokenized prompt, proprioceptive state, and (FAST-tokenized) action tokens.
-        # Choosing this value too small may chop off tokens at the end of your sequence (the code will throw
-        # a warning), while choosing it too large will waste memory (since we pad each batch element to the
-        # max_token_len). A good rule of thumb is to use approx 180 for single-arm robots, and approx 250 for
-        # two-arm robots. Generally, err on the lower side here first, and potentially increase the value if
-        # you see many warnings being thrown during training.
-        model=pi0_fast.Pi0FASTConfig(action_dim=7, action_horizon=10, max_token_len=180),
-        data=LeRobotLiberoDataConfig(
-            repo_id="physical-intelligence/libero",
-            base_config=DataConfig(prompt_from_task=True),
-            extra_delta_transform=True,
-        ),
-        # Note that we load the pi0-FAST base model checkpoint here.
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_fast_base/params"),
-        num_train_steps=30_000,
-    ),
-    TrainConfig(
-        name="pi0_fast_libero_low_mem_finetune",
-        # Here is an example of loading a pi0-FAST model for LoRA finetuning.
-        # For setting action_dim, action_horizon, and max_token_len, see the comments above.
-        model=pi0_fast.Pi0FASTConfig(
-            action_dim=7, action_horizon=10, max_token_len=180, paligemma_variant="gemma_2b_lora"
-        ),
-        data=LeRobotLiberoDataConfig(
-            repo_id="physical-intelligence/libero",
-            base_config=DataConfig(prompt_from_task=True),
-            extra_delta_transform=True,
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_fast_base/params"),
-        num_train_steps=30_000,
-        # Again, make sure to match the model config above when extracting the freeze filter
-        # that specifies which parameters should be frozen during LoRA finetuning.
-        freeze_filter=pi0_fast.Pi0FASTConfig(
-            action_dim=7, action_horizon=10, max_token_len=180, paligemma_variant="gemma_2b_lora"
-        ).get_freeze_filter(),
-        # Turn off EMA for LoRA finetuning.
-        ema_decay=None,
-    ),
+
     TrainConfig(
         name="pi05_libero",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
@@ -1126,13 +1185,27 @@ _CONFIGS = [
         num_train_steps=30_000,
     ),
     TrainConfig(
-        name="pi05_libero_wo_force",
-        # Pi05 Tabero 数据，只使用 7 维关节动作，不读触觉力（tactile）。
-        # 结构上仿照 pi0_libero_low_mem_finetune_wo_force，但使用 Pi05 模型与相同 Tabero 数据。
+        name="pi05_noforce_taforce",
+        # Pi05 tabero_force 数据，只使用 7 维关节动作，不读触觉力（tactile）。
+        # 结构上仿照 pi0_libero_low_mem_finetune_wo_force，但使用 Pi05 模型与相同 tabero_force 数据。
         model=pi0_config.Pi0Config(
             pi05=True,
             action_horizon=10,
             discrete_state_input=False,
+            # 使用与 force 版相同的 EXPERT_HIS_C_FUT loss 拆分逻辑，但关闭力的监督：
+            # - effective_action_dim=13：前 7 维是真实关节动作，后 6 维作为“力槽位”；
+            # - tactile_type=EXPERT_HIS_C_FUT：在 compute_loss 中按 [7 动作 + 6 力] 拆分；
+            # - tactile_dim_in=0：不创建 tactile token 相关 Linear，只启用 loss 拆分逻辑；
+            # - tactile_loss_weight=0.0：力的 loss 权重为 0，只剩 7 维动作 loss。
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_loss_weight=0.0,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=1.25e-5,
+            decay_lr=1.25e-6,
         ),
         data=LeRobotLiberoNoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
@@ -1157,7 +1230,7 @@ _CONFIGS = [
         ema_decay=0.999,
     ),
     TrainConfig(
-        name="pi05_libero_force_dec",
+        name="pi05_force_taforce_dec",
         # Pi05 力矩（decoder 版）：8×6 tactile 先 flatten→MLP→变成单个 tactile token，
         # 只在 suffix（expert decoder）前拼接，和 state token + action tokens 串联。
         model=pi0_config.Pi0Config(
@@ -1168,6 +1241,12 @@ _CONFIGS = [
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
             tactile_dim_in=8 * 6,
+            tactile_history=TABERO_TACTILE_HISTORY,
+            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=1.25e-5,
+            decay_lr=1.25e-6,
         ),
         data=LeRobotLiberoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
@@ -1180,7 +1259,7 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=50_000,
+        num_train_steps=30_000,
         batch_size=32,
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=10_000,
@@ -1192,7 +1271,7 @@ _CONFIGS = [
         ema_decay=0.999,
     ),
     TrainConfig(
-        name="pi05_libero_force_enc",
+        name="pi05_force_tacforce_enc",
         # Pi05 力矩（encoder 版）：8×6 tactile 先 flatten→MLP→变成单个 tactile token，
         # 只在 prefix 侧与视觉 token、语言 token、state token 串联，suffix 仅看动作 + 时间。
         model=pi0_config.Pi0Config(
@@ -1203,7 +1282,13 @@ _CONFIGS = [
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
             tactile_dim_in=8 * 6,
+            tactile_history=TABERO_TACTILE_HISTORY,
             tactile_in_prefix_only=True,
+            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=1.25e-5,
+            decay_lr=1.25e-6,
         ),
         data=LeRobotLiberoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
@@ -1228,209 +1313,7 @@ _CONFIGS = [
         ema_decay=0.999,
     ),
     #
-    # Fine-tuning Aloha configs.
-    #
-    # This is a test config that is used to illustate how train on a custom LeRobot dataset.
-    # For instuctions on how to convert and train on your own Aloha dataset see examples/aloha_real/README.md
-    TrainConfig(
-        name="pi0_aloha_pen_uncap",
-        model=pi0_config.Pi0Config(),
-        data=LeRobotAlohaDataConfig(
-            repo_id="physical-intelligence/aloha_pen_uncap_diverse",
-            assets=AssetsConfig(
-                assets_dir="gs://openpi-assets/checkpoints/pi0_base/assets",
-                asset_id="trossen",
-            ),
-            default_prompt="uncap the pen",
-            repack_transforms=_transforms.Group(
-                inputs=[
-                    _transforms.RepackTransform(
-                        {
-                            "images": {
-                                "cam_high": "observation.images.cam_high",
-                                "cam_left_wrist": "observation.images.cam_left_wrist",
-                                "cam_right_wrist": "observation.images.cam_right_wrist",
-                            },
-                            "state": "observation.state",
-                            "actions": "action",
-                        }
-                    )
-                ]
-            ),
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
-        num_train_steps=20_000,
-    ),
-    TrainConfig(
-        name="pi05_aloha_pen_uncap",
-        model=pi0_config.Pi0Config(pi05=True),
-        data=LeRobotAlohaDataConfig(
-            repo_id="physical-intelligence/aloha_pen_uncap_diverse",
-            assets=AssetsConfig(
-                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
-                asset_id="trossen",
-            ),
-            default_prompt="uncap the pen",
-            repack_transforms=_transforms.Group(
-                inputs=[
-                    _transforms.RepackTransform(
-                        {
-                            "images": {
-                                "cam_high": "observation.images.cam_high",
-                                "cam_left_wrist": "observation.images.cam_left_wrist",
-                                "cam_right_wrist": "observation.images.cam_right_wrist",
-                            },
-                            "state": "observation.state",
-                            "actions": "action",
-                        }
-                    )
-                ]
-            ),
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=20_000,
-        batch_size=64,
-    ),
-    #
-    # Fine-tuning DROID configs.
-    #
-    TrainConfig(
-        # This config is for fine-tuning pi0-FAST-base on the *full* DROID dataset.
-        # We use RLDS data loading to make training on this large dataset tractable.
-        # For fine-tuning on your own DROID dataset, see below.
-        name="pi0_fast_full_droid_finetune",
-        model=pi0_fast.Pi0FASTConfig(
-            action_dim=8,
-            action_horizon=16,
-            max_token_len=180,
-        ),
-        data=RLDSDroidDataConfig(
-            repo_id="droid",
-            # Set this to the path to your DROID RLDS dataset (the parent directory of the `droid` directory).
-            rlds_data_dir="<path_to_droid_rlds_dataset>",
-            action_space=droid_rlds_dataset.DroidActionSpace.JOINT_POSITION,
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_fast_base/params"),
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=1_000,
-            peak_lr=5e-5,
-            decay_steps=1_000_000,
-            decay_lr=5e-5,
-        ),
-        num_train_steps=100_000,  # 100k steps should be sufficient, takes ~2 days on 8x H100s
-        batch_size=256,
-        log_interval=100,
-        save_interval=5000,
-        keep_period=20_000,
-        num_workers=0,  # Important: RLDS DataLoader requires num_workers=0, handles multi-processing internally
-    ),
-    TrainConfig(
-        # This config is for fine-tuning pi05 on the *full* DROID dataset.
-        # We use RLDS data loading to make training on this large dataset tractable.
-        # For fine-tuning on your own DROID dataset, see below.
-        name="pi05_full_droid_finetune",
-        model=pi0_config.Pi0Config(
-            pi05=True,
-            action_dim=32,
-            action_horizon=16,
-        ),
-        data=RLDSDroidDataConfig(
-            repo_id="droid",
-            # Set this to the path to your DROID RLDS dataset (the parent directory of the `droid` directory).
-            rlds_data_dir="/mnt/pi-data/kevin",
-            action_space=droid_rlds_dataset.DroidActionSpace.JOINT_POSITION,
-            assets=AssetsConfig(
-                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets/",
-                asset_id="droid",
-            ),
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=1_000,
-            peak_lr=5e-5,
-            decay_steps=1_000_000,
-            decay_lr=5e-5,
-        ),
-        num_train_steps=100_000,
-        batch_size=256,
-        log_interval=100,
-        save_interval=5000,
-        keep_period=10_000,
-        num_workers=0,  # Important: RLDS DataLoader requires num_workers=0, handles multi-processing internally
-    ),
-    TrainConfig(
-        # This config is for fine-tuning pi05-DROID on a custom (smaller) DROID dataset.
-        # Here, we use LeRobot data format (like for all other fine-tuning examples)
-        # To convert your custom DROID dataset (<10s of hours) to LeRobot format, see examples/droid/convert_droid_data_to_lerobot.py
-        name="pi05_droid_finetune",
-        model=pi0_config.Pi0Config(
-            pi05=True,
-            action_dim=32,  # pi05 is trained with 32-dim actions
-            action_horizon=16,
-        ),
-        data=LeRobotDROIDDataConfig(
-            # Replace with your custom DROID LeRobot dataset repo id.
-            repo_id="your_hf_username/my_droid_dataset",
-            base_config=DataConfig(prompt_from_task=True),
-            assets=AssetsConfig(
-                # Important: reuse the original DROID norm stats during fine-tuning!
-                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
-                asset_id="droid",
-            ),
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
-        num_train_steps=20_000,
-        batch_size=32,
-    ),
-    #
-    # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
-    #
-    TrainConfig(
-        name="pi0_aloha_sim",
-        model=pi0_config.Pi0Config(),
-        data=LeRobotAlohaDataConfig(
-            repo_id="lerobot/aloha_sim_transfer_cube_human",
-            default_prompt="Transfer cube",
-            use_delta_joint_actions=False,
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
-        num_train_steps=20_000,
-    ),
-    #
-    # Debugging configs.
-    #
-    TrainConfig(
-        name="debug",
-        data=FakeDataConfig(),
-        batch_size=2,
-        model=pi0_config.Pi0Config(paligemma_variant="dummy", action_expert_variant="dummy"),
-        save_interval=100,
-        overwrite=True,
-        exp_name="debug",
-        num_train_steps=10,
-        wandb_enabled=False,
-    ),
-    TrainConfig(
-        name="debug_restore",
-        data=FakeDataConfig(),
-        batch_size=2,
-        model=pi0_config.Pi0Config(paligemma_variant="dummy", action_expert_variant="dummy"),
-        weight_loader=weight_loaders.CheckpointWeightLoader("./checkpoints/debug/debug/9/params"),
-        overwrite=True,
-        exp_name="debug",
-        num_train_steps=10,
-        wandb_enabled=False,
-    ),
-    TrainConfig(
-        name="debug_pi05",
-        model=pi0_config.Pi0Config(pi05=True, paligemma_variant="dummy", action_expert_variant="dummy"),
-        data=FakeDataConfig(),
-        batch_size=2,
-        num_train_steps=10,
-        overwrite=True,
-        exp_name="debug_pi05",
-        wandb_enabled=False,
-    ),
+
     #
     # RoboArena configs.
     #

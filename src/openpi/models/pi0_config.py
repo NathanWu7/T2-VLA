@@ -41,6 +41,10 @@ class Pi0Config(_model.BaseModelConfig):
     # Effective input dim for the tactile MLP projector. Usually tactile_dim * len(tactile_history).
     # When not set explicitly (e.g., from training config + data.tactile_history), we fall back to tactile_dim.
     tactile_dim_in: int | None = None
+    # Tactile 历史长度（时间步数），主要用于 TCN 编码器：
+    # - 对于 Tabero marker motion（9 帧：1 基准 + 8 接触），可以设为 8（只数历史帧）。
+    # - 对于 gripper_force（8×6），可以设为 8。
+    tactile_history: int | None = None
     # 有效的“语义 action 维度”。当数据中的 action 先 padding 到较大的 action_dim（例如 32），
     # 但真实只有前 K 维有意义时，可以把 effective_action_dim 设为 K，用于 loss 中的动作/力矩切分。
     # 默认为 action_dim，保持向后兼容。
@@ -48,6 +52,21 @@ class Pi0Config(_model.BaseModelConfig):
     # Tactile token 位置：默认为仅在 suffix（decoder）侧插入；
     # 当 tactile_in_prefix_only=True 时，仅在 prefix（encoder）侧插入。
     tactile_in_prefix_only: bool = False
+    # 触觉 / 力损失的权重：total_loss = action_loss + tactile_loss_weight * tactile_loss。
+    # 仅在 tactile_type 为 EXPERT_HIS_C_FUT 时生效。
+    tactile_loss_weight: float = 0.1
+    # Tactile 编码器类型：
+    # - "mlp"：使用旧版 flatten+MLP（向后兼容，默认）
+    # - "tcn"：使用时序卷积网络（TCN）作为 tactile tokenizer（例如 Tabero tacfield marker motion）
+    tactile_encoder_type: str = "mlp"
+    # 是否存在“基准帧”（仅影响 TCN 编码器）：
+    # - False：输入视为不含显式基准帧（如 8×6 gripper_force）；
+    # - True：约定输入为 [1 + H, D]，第 0 帧为基准，其余 H 帧为历史（如 Tabero 9 帧 marker）。
+    tactile_use_reference_frame: bool = False
+    # 是否对历史帧做“减基准帧”差分（仅影响 TCN 编码器，且在 tactile_use_reference_frame=True 时生效）：
+    # - True：只对后 H 帧做 (frame - baseline)，长度为 H；
+    # - False：对 [baseline + H 帧] 全部做 TCN，例如直接用 9 帧 marker 序列。
+    tactile_diff_from_reference: bool = True
 
     def __post_init__(self):
         if self.max_token_len is None:

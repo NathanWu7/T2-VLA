@@ -11,6 +11,7 @@ from openpi.models import model as _model
 from openpi.models import pi0_config
 import openpi.models.gemma as _gemma
 import openpi.models.siglip as _siglip
+from openpi.models import tactile_encoder as _tactile_encoder
 from openpi.shared import array_typing as at
 from openpi.shared.tactile_type import TactileType
 
@@ -70,11 +71,15 @@ class Pi0(_model.BaseModel):
         self.pi05 = config.pi05
         self.tactile_type = config.tactile_type
         self.tactile_dim = config.tactile_dim
+        self.tactile_history = config.tactile_history
+        self.tactile_encoder_type = config.tactile_encoder_type
         # 有效 action 维度：用于 loss 中的 [动作, 力矩] 切分。
         # 允许数据只在前 K 维有意义，其余为 padding。
         self.effective_action_dim = config.effective_action_dim
         # 控制 tactile token 只放在 prefix（encoder）还是只放在 suffix（decoder）。
         self.tactile_in_prefix_only = config.tactile_in_prefix_only
+        # 力 / 触觉 loss 的权重（total_loss = action_loss + tactile_loss_weight * tactile_loss）。
+        self.tactile_loss_weight = config.tactile_loss_weight
 
         # 仅禁止尚未实现的 TactileType 组合；允许 pi05 + EXPERT_HIS_C_FUT。
         if self.pi05 and self.tactile_type not in (TactileType.NO, TactileType.EXPERT_HIS_C_FUT):
@@ -105,15 +110,20 @@ class Pi0(_model.BaseModel):
         img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
 
-        # Tactile projection (history encoder) — 仅在需要 tactile token 时创建权重。
+        # Tactile 编码器（历史 encoder）——仅在需要 tactile token 时创建权重。
         # 对于只想做 loss 拆分、不需要 tactile token 的配置，可以把 tactile_dim_in 设为 0，
-        # 这样既不会创建新的 Linear 权重，也不会影响已有 checkpoint 加载。
+        # 这样既不会创建新的编码器权重，也不会影响已有 checkpoint 加载。
+        self.tactile_encoder = None
         if self.tactile_type is TactileType.EXPERT_HIS_C_FUT and config.tactile_dim_in > 0:
-            self.tactile_proj_in = nnx.Linear(config.tactile_dim_in, 2 * action_expert_config.width, rngs=rngs)
-            self.tactile_proj_out = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
-        else:
-            self.tactile_proj_in = None
-            self.tactile_proj_out = None
+            self.tactile_encoder = _tactile_encoder.create_tactile_encoder(
+                encoder_type=self.tactile_encoder_type,
+                tactile_dim_in=config.tactile_dim_in,
+                tactile_history=self.tactile_history,
+                has_reference_frame=config.tactile_use_reference_frame,
+                diff_from_reference=config.tactile_diff_from_reference,
+                expert_width=action_expert_config.width,
+                rngs=rngs,
+            )
 
         # Action / time path.
         if config.pi05:
@@ -135,12 +145,13 @@ class Pi0(_model.BaseModel):
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
-    def _project_tactile(self, tactile: at.Float[at.Array, "b *d"]) -> at.Float[at.Array, "b emb"]:
-        if self.tactile_proj_in is None or self.tactile_proj_out is None:
-            raise ValueError("Tactile projection is not initialized but was called.")
-        tactile_hidden = self.tactile_proj_in(tactile)
-        tactile_hidden = nnx.swish(tactile_hidden)
-        return self.tactile_proj_out(tactile_hidden)
+    def _encode_tactile(self, tactile: jax.Array) -> at.Float[at.Array, "b emb"]:
+        """将 Observation.tactile 编码为单个 embedding token。"""
+        if tactile is None:
+            raise ValueError("Tactile encoder was called but observation.tactile is None.")
+        if self.tactile_encoder is None:
+            raise ValueError("Tactile encoder is not initialized but was called.")
+        return self.tactile_encoder(tactile)
 
     def _process_tactile_tokens(
         self, obs: _model.Observation, mode: str
@@ -163,13 +174,8 @@ class Pi0(_model.BaseModel):
             use_in_prefix = mode == "prefix" and self.tactile_in_prefix_only
 
             if use_in_suffix or use_in_prefix:
-                # 将多帧历史 tactile concat 成一个向量，作为单个 expert / conditioning token。
-                if obs.tactile.ndim == obs.state.ndim + 1:
-                    batch_size, _, _ = obs.tactile.shape
-                    tactile_flat = obs.tactile.reshape(batch_size, -1)
-                else:
-                    tactile_flat = obs.tactile
-                tactile_token = self._project_tactile(tactile_flat)[:, None, :]
+                # 将多帧历史 tactile 编码成单个 expert / conditioning token。
+                tactile_token = self._encode_tactile(obs.tactile)[:, None, :]
                 tokens_list.append(tactile_token)
                 input_mask_list.append(jnp.ones(tactile_token.shape[:2], dtype=jnp.bool_))
                 ar_mask_list.append(ar_mask_value)
@@ -276,8 +282,16 @@ class Pi0(_model.BaseModel):
 
     @override
     def compute_loss(
-        self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
-    ) -> at.Float[at.Array, "*b ah"]:
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        actions: _model.Actions,
+        *,
+        train: bool = False,
+        return_components: bool = False,
+    ) -> at.Float[at.Array, "*b ah"] | tuple[
+        at.Float[at.Array, "*b ah"], dict[str, at.Float[at.Array, "*b ah"]]
+    ]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         observation = _model.preprocess_observation(
             preprocess_rng,
@@ -324,9 +338,26 @@ class Pi0(_model.BaseModel):
                 jnp.square(v_t[..., tactile_slice] - u_t[..., tactile_slice]),
                 axis=-1,
             )
-            return action_loss + 0.1 * tactile_loss
 
-        return jnp.mean(jnp.square(v_t - u_t), axis=-1)
+            # 仅在训练模式下，单独 log action_loss / tactile_loss 的 batch 均值，方便排查数值问题。
+            if train:
+                jax.debug.print(
+                    "Pi0 loss components (batch mean): action_loss={action_loss:.6f}, tactile_loss={tactile_loss:.6f}",
+                    action_loss=jnp.mean(action_loss),
+                    tactile_loss=jnp.mean(tactile_loss),
+                )
+
+            total_loss = action_loss + self.tactile_loss_weight * tactile_loss
+            if return_components:
+                return total_loss, {"action_loss": action_loss, "tactile_loss": tactile_loss}
+            return total_loss
+
+        total_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        if return_components:
+            # 非 EXPERT_HIS_C_FUT 情况：返回占位分量，方便上层统一处理。
+            zero = jnp.zeros_like(total_loss)
+            return total_loss, {"action_loss": zero, "tactile_loss": zero}
+        return total_loss
 
     @override
     def sample_actions(

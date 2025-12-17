@@ -26,6 +26,8 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
+from openpi.models.pi0 import Pi0
+from openpi.shared.tactile_type import TactileType
 
 
 def init_logging():
@@ -147,15 +149,40 @@ def train_step(
     def loss_fn(
         model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
     ):
-        chunked_loss = model.compute_loss(rng, observation, actions, train=True)
-        return jnp.mean(chunked_loss)
+        # 默认：只返回总 loss，action_loss / tactile_loss 置零占位，保证日志树结构一致。
+        chunked_loss = None
+        action_loss_mean = jnp.array(0.0, dtype=jnp.float32)
+        tactile_loss_mean = jnp.array(0.0, dtype=jnp.float32)
+
+        if isinstance(model, Pi0) and getattr(model, "tactile_type", None) is TactileType.EXPERT_HIS_C_FUT:
+            # Pi0 + EXPERT_HIS_C_FUT：要求模型同时返回分量 loss。
+            chunked_loss, components = model.compute_loss(
+                rng,
+                observation,
+                actions,
+                train=True,
+                return_components=True,
+            )
+            action_loss_mean = jnp.mean(components["action_loss"])
+            tactile_loss_mean = jnp.mean(components["tactile_loss"])
+        else:
+            chunked_loss = model.compute_loss(rng, observation, actions, train=True)
+
+        total_loss = jnp.mean(chunked_loss)
+        aux = {
+            "action_loss": action_loss_mean,
+            "tactile_loss": tactile_loss_mean,
+        }
+        return total_loss, aux
 
     train_rng = jax.random.fold_in(rng, state.step)
     observation, actions = batch
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
+    (loss, aux), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
+        model, train_rng, observation, actions
+    )
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -187,6 +214,9 @@ def train_step(
         "loss": loss,
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
+        # 这两个字段在非 EXPERT_HIS_C_FUT 配置下为 0，占位以便 wandb 画统一曲线。
+        "action_loss": aux["action_loss"],
+        "tactile_loss": aux["tactile_loss"],
     }
     return new_state, info
 
