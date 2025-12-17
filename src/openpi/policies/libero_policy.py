@@ -117,12 +117,15 @@ class TaberoTacImgInputs(transforms.DataTransformFn):
     model_type: _model.ModelType
 
     def __call__(self, data: dict) -> dict:
-        base_image = _parse_image(data["observation/image"])
-        wrist_image = _parse_image(data["observation/wrist_image"])
-        tactile_image = _parse_image(data["observation/tactile_image"])
+        # Tabero v2.1 数据集的单条样本是一个“扁平”的 dict，keys 直接是
+        #   "image", "wrist_image", "tactile_image", "state", "actions", ...
+        # 而不是嵌套在 "observation/..." 之下。
+        base_image = _parse_image(data["image"])
+        wrist_image = _parse_image(data["wrist_image"])
+        tactile_image = _parse_image(data["tactile_image"])
 
         inputs = {
-            "state": data["observation/state"],
+            "state": data["state"],
             "image": {
                 "base_0_rgb": base_image,
                 "left_wrist_0_rgb": wrist_image,

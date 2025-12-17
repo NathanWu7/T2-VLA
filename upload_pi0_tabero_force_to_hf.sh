@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ###############################################################################
-# 把 pi0_libero_force_low_mem_finetune 的 checkpoint 和 norm_stats
-# 一次性打包并上传到同一个 Hugging Face 仓库。
+# 把某个训练好的 pi 模型（当前配置为 pi05_libero_force_dec）的
+# checkpoint 和 norm_stats 一次性打包并上传到同一个 Hugging Face 仓库。
 #
 # 使用前准备：
 #   1）已经跑完训练：checkpoints/pi0_libero_force_low_mem_finetune/force_test2/...
@@ -23,12 +23,14 @@ set -euo pipefail
 ########################
 
 # HF 仓库 id（模型 + norm_stats 都放这里）
-HF_REPO_ID="NathanWu7/pi0_tabero_force"
+# 这里为 pi05_libero_force_dec 单独用一个仓库，如需修改可直接改成你想要的名字。
+HF_REPO_ID="NathanWu7/pi05_tabero_force"
 HF_REPO_TYPE="model"   # 你也可以改成 "dataset"
 
-# 训练 config 名 + 实验名（和 train_force_test.sh 保持一致）
-CONFIG_NAME="pi0_libero_force_low_mem_finetune"
-EXP_NAME="force_test2"
+# 训练 config 名 + 实验名（和实际训练命令保持一致）
+# 例如：uv run scripts/train.py pi05_libero_force_dec --exp-name pi05_libero_force_dec --overwrite
+CONFIG_NAME="pi05_libero_force_dec"
+EXP_NAME="pi05_libero_force_dec"
 
 # 想要导出的 checkpoint step（子目录名），例如 "29999"。
 # 为空则导出整个实验目录（不推荐，一般只导出一个或少数几个 step）。
@@ -38,7 +40,7 @@ CKPT_STEP="49999"
 DATA_REPO_ID="NathanWu7/tabero_force"
 
 # 本地导出目录（脚本会自动创建/覆盖）
-EXPORT_DIR="export/pi0_tabero_force"
+EXPORT_DIR="export/pi05_tabero_force"
 
 ########################
 # 脚本开始
@@ -153,7 +155,7 @@ cp -r "${NORM_SRC}" "${NORM_DST}/"
 # 生成一个简单的 README，方便在 HF 页面查看信息
 README_PATH="README.md"
 cat > "${README_PATH}" <<EOF
-# pi0_libero_force_low_mem_finetune on NathanWu7/tabero_force
+# pi05_libero_force_dec on ${DATA_REPO_ID}
 
 本仓库包含：
 
@@ -163,14 +165,14 @@ cat > "${README_PATH}" <<EOF
   - 路径：\`norm_stats/${CONFIG_NAME}/${DATA_REPO_ID}/...\`
 
 训练配置基于 \`${CONFIG_NAME}\`，数据集为 Hugging Face 上的
-\`NathanWu7/tabero_force\`（LeRobot 格式）[链接](https://huggingface.co/datasets/NathanWu7/tabero_force)。
+\`${DATA_REPO_ID}\`（LeRobot 格式）[链接](https://huggingface.co/datasets/${DATA_REPO_ID})。
 
 推理时的典型用法示例（伪代码）：
 
 - checkpoint 加载路径示例：
-  - \`/path/to/clone/pi0_tabero_force/checkpoints/${CONFIG_NAME}/${EXP_NAME}/<step>/params\`
+  - \`/path/to/clone/pi05_tabero_force/checkpoints/${CONFIG_NAME}/${EXP_NAME}/<step>/params\`
 - norm_stats 加载路径示例（AssetsConfig）：
-  - \`assets_dir="/path/to/clone/pi0_tabero_force/norm_stats/${CONFIG_NAME}"\`
+  - \`assets_dir="/path/to/clone/pi05_tabero_force/norm_stats/${CONFIG_NAME}"\`
   - \`asset_id="${DATA_REPO_ID}"\`
 EOF
 
