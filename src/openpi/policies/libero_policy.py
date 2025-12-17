@@ -153,26 +153,37 @@ class TaberoTacFieldInputs(transforms.DataTransformFn):
     Tabero 输入（2 路图像 + 触觉力场 tactile + 13 维动作）。
 
     - 图像：
-        - observation/image          -> base_0_rgb
-        - observation/wrist_image    -> left_wrist_0_rgb
-        - 第三路视觉留空，用零图 + mask=False（与原始 LiberoInputs 一致）
-    - 力场：
-        - observation/tactile_gripper_force (优先)
-        - 或 observation/gripper_force（兼容旧命名）
-      直接作为 Observation.tactile（形状 [B, N, 6]），在模型内部 flatten + MLP 得到 tactile token。
+        - Tabero v2.1 扁平格式：
+            - image                  -> base_0_rgb
+            - wrist_image            -> left_wrist_0_rgb
+          第三路视觉留空，用零图 + mask=False（与原始 LiberoInputs 一致）
+        - 兼容旧格式：observation/image, observation/wrist_image
+    - 触觉力场：
+        - 推荐：tactile_marker_motion，形状约为 [9, 198, 2]
+          在这里先 reshape 成 [9, 198*2]，再作为 Observation.tactile（[*b, n, e]）进入模型，
+          模型内部再整体 flatten 成一个 tactile token。
+        - 兼容：tactile_gripper_force / observation/tactile_gripper_force（例如 [8, 6]），
+          直接作为 Observation.tactile 使用。
     """
 
     model_type: _model.ModelType
 
     def __call__(self, data: dict) -> dict:
-        base_image = _parse_image(data["observation/image"])
-        wrist_image = _parse_image(data["observation/wrist_image"])
+        # 支持 Tabero v2.1 扁平格式和旧的 observation/... 格式。
+        if "image" in data:
+            base_image = _parse_image(data["image"])
+            wrist_image = _parse_image(data["wrist_image"])
+            state = data["state"]
+        else:
+            base_image = _parse_image(data["observation/image"])
+            wrist_image = _parse_image(data["observation/wrist_image"])
+            state = data["observation/state"]
 
         right_image = np.zeros_like(base_image)
         right_mask = np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_
 
         inputs = {
-            "state": data["observation/state"],
+            "state": state,
             "image": {
                 "base_0_rgb": base_image,
                 "left_wrist_0_rgb": wrist_image,
@@ -185,8 +196,81 @@ class TaberoTacFieldInputs(transforms.DataTransformFn):
             },
         }
 
-        # 触觉力场作为 tactile。
-        if "observation/tactile_gripper_force" in data:
+        # 触觉力场作为 tactile：
+        # 优先使用 tactile_marker_motion（例如 [9, 198, 2]），reshape 成 [9, 198*2] 后作为 [n, e]。
+        if "tactile_marker_motion" in data:
+            motion = np.asarray(data["tactile_marker_motion"])
+            if motion.ndim != 3:
+                raise ValueError(f"tactile_marker_motion must be 3D, got shape {motion.shape}")
+            n, m, d = motion.shape
+            tactile = motion.reshape(n, m * d)
+            inputs["tactile"] = tactile
+        elif "tactile_gripper_force" in data:
+            inputs["tactile"] = data["tactile_gripper_force"]
+        elif "observation/tactile_gripper_force" in data:
+            inputs["tactile"] = data["observation/tactile_gripper_force"]
+        elif "observation/gripper_force" in data:
+            inputs["tactile"] = data["observation/gripper_force"]
+
+        if "actions" in data:
+            inputs["actions"] = data["actions"]
+        if "prompt" in data:
+            inputs["prompt"] = data["prompt"]
+
+        return inputs
+
+
+@dataclasses.dataclass(frozen=True)
+class TaberoTacForceInputs(transforms.DataTransformFn):
+    """
+    Tabero 输入（2 路图像 + 8×6 触觉指力历史 + 13 维动作）。
+
+    - 图像：
+        - Tabero v2.1 扁平格式：
+            - image                  -> base_0_rgb
+            - wrist_image            -> left_wrist_0_rgb
+          第三路视觉留空，用零图 + mask=False（与原始 LiberoInputs 一致）
+        - 兼容旧格式：observation/image, observation/wrist_image
+    - 指力历史：
+        - tactile_gripper_force（优先），形状约为 [8, 6]
+        - 兼容：observation/tactile_gripper_force / observation/gripper_force
+      直接作为 Observation.tactile（[*b, n, e]）喂给模型，用于 EXPERT_HIS_C_FUT 的“历史指力 token”。
+    """
+
+    model_type: _model.ModelType
+
+    def __call__(self, data: dict) -> dict:
+        # 支持 Tabero v2.1 扁平格式和旧的 observation/... 格式。
+        if "image" in data:
+            base_image = _parse_image(data["image"])
+            wrist_image = _parse_image(data["wrist_image"])
+            state = data["state"]
+        else:
+            base_image = _parse_image(data["observation/image"])
+            wrist_image = _parse_image(data["observation/wrist_image"])
+            state = data["observation/state"]
+
+        right_image = np.zeros_like(base_image)
+        right_mask = np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_
+
+        inputs = {
+            "state": state,
+            "image": {
+                "base_0_rgb": base_image,
+                "left_wrist_0_rgb": wrist_image,
+                "right_wrist_0_rgb": right_image,
+            },
+            "image_mask": {
+                "base_0_rgb": np.True_,
+                "left_wrist_0_rgb": np.True_,
+                "right_wrist_0_rgb": right_mask,
+            },
+        }
+
+        # 8×6 左右指力历史作为 tactile。
+        if "tactile_gripper_force" in data:
+            inputs["tactile"] = data["tactile_gripper_force"]
+        elif "observation/tactile_gripper_force" in data:
             inputs["tactile"] = data["observation/tactile_gripper_force"]
         elif "observation/gripper_force" in data:
             inputs["tactile"] = data["observation/gripper_force"]
