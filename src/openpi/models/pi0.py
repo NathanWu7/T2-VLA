@@ -113,15 +113,23 @@ class Pi0(_model.BaseModel):
         # Tactile 编码器（历史 encoder）——仅在需要 tactile token 时创建权重。
         # 对于只想做 loss 拆分、不需要 tactile token 的配置，可以把 tactile_dim_in 设为 0，
         # 这样既不会创建新的编码器权重，也不会影响已有 checkpoint 加载。
+        #
+        # 注意不同用法下的 embedding 维度：
+        # - 当 tactile_in_prefix_only=False（默认“decoder/suffix”用法）时，tactile token 只进入 expert 分支，
+        #   其维度与 action_expert_config.width 对齐（例如 1024）。
+        # - 当 tactile_in_prefix_only=True（“encoder/prefix”用法）时，tactile token 只作为 LLM 前缀输入，
+        #   必须与视觉 / 文本 token 的维度 paligemma_config.width 对齐（例如 2048），
+        #   否则在 embed_prefix 里与图像/文本 token 做 concat 时会报维度不一致。
         self.tactile_encoder = None
         if self.tactile_type is TactileType.EXPERT_HIS_C_FUT and config.tactile_dim_in > 0:
+            tactile_width = paligemma_config.width if self.tactile_in_prefix_only else action_expert_config.width
             self.tactile_encoder = _tactile_encoder.create_tactile_encoder(
                 encoder_type=self.tactile_encoder_type,
                 tactile_dim_in=config.tactile_dim_in,
                 tactile_history=self.tactile_history,
                 has_reference_frame=config.tactile_use_reference_frame,
                 diff_from_reference=config.tactile_diff_from_reference,
-                expert_width=action_expert_config.width,
+                expert_width=tactile_width,
                 rngs=rngs,
             )
 
