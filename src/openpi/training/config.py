@@ -892,7 +892,9 @@ _CONFIGS = [
             # 所以只做 [前 7 维动作 + 后 6 维力] 的加权监督，不注入 tactile token。
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
-            tactile_dim_in=6,
+            # tactile_dim_in=0 表示不需要 tactile token 的 Linear 投影，只启用 loss 拆分逻辑，
+            # 既避免引入新的权重，又保持和原有 checkpoint 的结构兼容。
+            tactile_dim_in=0,
         ),
         data=TaberoTacImgDataConfig(
             # 你的原始 Tabero 数据集（含 tactile_image / tactile_gripper_force 等字段）。

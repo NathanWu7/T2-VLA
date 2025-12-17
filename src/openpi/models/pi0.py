@@ -105,8 +105,10 @@ class Pi0(_model.BaseModel):
         img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
 
-        # Tactile projection (history encoder) — 当前仅支持 EXPERT_HIS_C_FUT 一种模式。
-        if self.tactile_type is TactileType.EXPERT_HIS_C_FUT:
+        # Tactile projection (history encoder) — 仅在需要 tactile token 时创建权重。
+        # 对于只想做 loss 拆分、不需要 tactile token 的配置，可以把 tactile_dim_in 设为 0，
+        # 这样既不会创建新的 Linear 权重，也不会影响已有 checkpoint 加载。
+        if self.tactile_type is TactileType.EXPERT_HIS_C_FUT and config.tactile_dim_in > 0:
             self.tactile_proj_in = nnx.Linear(config.tactile_dim_in, 2 * action_expert_config.width, rngs=rngs)
             self.tactile_proj_out = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
         else:
