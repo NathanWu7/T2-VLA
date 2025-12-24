@@ -95,9 +95,12 @@ class Observation(Generic[ArrayT]):
     image_masks: dict[str, at.Bool[ArrayT, "*b"]]
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "*b s"]
-    # Tactile / joint torque history. Shape convention: [*b, n, e].
-    # When tactile is not used, this is None and the model ignores it.
-    tactile: at.Float[ArrayT, "*b n e"] | None = None
+    # Decoder-suffix 触觉 / 力矩历史（例如 8×6 指力），形状约定：[*b, n, e]。
+    # 当未使用触觉时为 None。
+    tactile_suffix: at.Float[ArrayT, "*b n e"] | None = None
+    # Encoder-prefix 触觉历史（例如 Tabero 9 帧 marker motion，经 reshape 后的 [*b, n, e]）。
+    # 仅在 dual_tactile=True 且相应数据流提供时使用。
+    tactile_prefix: at.Float[ArrayT, "*b n e"] | None = None
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
@@ -127,7 +130,8 @@ class Observation(Generic[ArrayT]):
             images=data["image"],
             image_masks=data["image_mask"],
             state=data["state"],
-            tactile=data.get("tactile"),
+            tactile_suffix=data.get("tactile_suffix"),
+            tactile_prefix=data.get("tactile_prefix"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -206,17 +210,20 @@ def preprocess_observation(
 
     # Handle tactile according to TactileType to produce the state/tactile fields seen by the model.
     state = observation.state
-    tactile = observation.tactile
+    tactile_suffix = observation.tactile_suffix
+    tactile_prefix = observation.tactile_prefix
 
-    if tactile is not None and tactile_type is TactileType.NO:
-        # 模型完全忽略 tactile。
-        tactile = None
+    if tactile_type is TactileType.NO:
+        # 模型完全忽略所有触觉通道。
+        tactile_suffix = None
+        tactile_prefix = None
 
     return Observation(
         images=out_images,
         image_masks=out_masks,
         state=state,
-        tactile=tactile,
+        tactile_suffix=tactile_suffix,
+        tactile_prefix=tactile_prefix,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,

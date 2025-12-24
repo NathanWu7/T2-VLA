@@ -68,6 +68,20 @@ class Pi0Config(_model.BaseModelConfig):
     # - False：对 [baseline + H 帧] 全部做 TCN，例如直接用 9 帧 marker 序列。
     tactile_diff_from_reference: bool = True
 
+    # Encoder-prefix 触觉通道配置（仅在显式启用 prefix 触觉流时生效）。
+    tactile_prefix_dim_in: int | None = None
+    tactile_prefix_history: int | None = None
+    tactile_prefix_encoder_type: str | None = None
+    tactile_prefix_use_reference_frame: bool | None = None
+    tactile_prefix_diff_from_reference: bool | None = None
+
+    # 触觉通道选择（新接口，用于替代 dual_tactile 开关）：
+    # - () / []：不启用任何触觉 token，仅使用动作/力的 loss 拆分逻辑；
+    # - ("tactile_suffix",)：只启用 decoder-suffix 通道（例如原版 tacforce 的 8×6 指力）；
+    # - ("tactile_prefix",)：只启用 encoder-prefix 通道（例如 tacfield 的 marker motion）；
+    # - ("tactile_suffix", "tactile_prefix")：同时启用前缀+后缀双通道。
+    tactile_streams: tuple[str, ...] = ()
+
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)

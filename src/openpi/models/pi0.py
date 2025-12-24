@@ -73,6 +73,8 @@ class Pi0(_model.BaseModel):
         self.tactile_dim = config.tactile_dim
         self.tactile_history = config.tactile_history
         self.tactile_encoder_type = config.tactile_encoder_type
+        # 触觉通道选择（"tactile_suffix" / "tactile_prefix" / 两者）。
+        self.tactile_streams = tuple(config.tactile_streams)
         # 有效 action 维度：用于 loss 中的 [动作, 力矩] 切分。
         # 允许数据只在前 K 维有意义，其余为 padding。
         self.effective_action_dim = config.effective_action_dim
@@ -111,27 +113,51 @@ class Pi0(_model.BaseModel):
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
 
         # Tactile 编码器（历史 encoder）——仅在需要 tactile token 时创建权重。
-        # 对于只想做 loss 拆分、不需要 tactile token 的配置，可以把 tactile_dim_in 设为 0，
+        # 对于只想做 loss 拆分、不需要 tactile token 的配置，可以把 tactile_dim_in/tactile_prefix_dim_in 设为 0 或 None，
         # 这样既不会创建新的编码器权重，也不会影响已有 checkpoint 加载。
         #
-        # 注意不同用法下的 embedding 维度：
-        # - 当 tactile_in_prefix_only=False（默认“decoder/suffix”用法）时，tactile token 只进入 expert 分支，
-        #   其维度与 action_expert_config.width 对齐（例如 1024）。
-        # - 当 tactile_in_prefix_only=True（“encoder/prefix”用法）时，tactile token 只作为 LLM 前缀输入，
-        #   必须与视觉 / 文本 token 的维度 paligemma_config.width 对齐（例如 2048），
-        #   否则在 embed_prefix 里与图像/文本 token 做 concat 时会报维度不一致。
-        self.tactile_encoder = None
-        if self.tactile_type is TactileType.EXPERT_HIS_C_FUT and config.tactile_dim_in > 0:
-            tactile_width = paligemma_config.width if self.tactile_in_prefix_only else action_expert_config.width
-            self.tactile_encoder = _tactile_encoder.create_tactile_encoder(
-                encoder_type=self.tactile_encoder_type,
-                tactile_dim_in=config.tactile_dim_in,
-                tactile_history=self.tactile_history,
-                has_reference_frame=config.tactile_use_reference_frame,
-                diff_from_reference=config.tactile_diff_from_reference,
-                expert_width=tactile_width,
-                rngs=rngs,
-            )
+        self.tactile_prefix_encoder = None
+        self.tactile_suffix_encoder = None
+        if self.tactile_type is TactileType.EXPERT_HIS_C_FUT:
+            use_prefix = "tactile_prefix" in self.tactile_streams
+            use_suffix = "tactile_suffix" in self.tactile_streams
+
+            # Encoder-prefix 触觉（例如 Tabero marker motion，经 TCN 编码）。
+            if use_prefix and config.tactile_prefix_dim_in is not None and config.tactile_prefix_dim_in > 0:
+                prefix_width = paligemma_config.width
+                self.tactile_prefix_encoder = _tactile_encoder.create_tactile_encoder(
+                    encoder_type=(
+                        config.tactile_prefix_encoder_type
+                        if config.tactile_prefix_encoder_type is not None
+                        else "tcn"
+                    ),
+                    tactile_dim_in=config.tactile_prefix_dim_in,
+                    tactile_history=config.tactile_prefix_history,
+                    has_reference_frame=(
+                        config.tactile_prefix_use_reference_frame
+                        if config.tactile_prefix_use_reference_frame is not None
+                        else False
+                    ),
+                    diff_from_reference=(
+                        config.tactile_prefix_diff_from_reference
+                        if config.tactile_prefix_diff_from_reference is not None
+                        else True
+                    ),
+                    expert_width=prefix_width,
+                    rngs=rngs,
+                )
+            # Decoder-suffix 触觉（例如 8×6 指力，经 MLP 编码）。
+            if use_suffix and config.tactile_dim_in is not None and config.tactile_dim_in > 0:
+                suffix_width = action_expert_config.width
+                self.tactile_suffix_encoder = _tactile_encoder.create_tactile_encoder(
+                    encoder_type=self.tactile_encoder_type,
+                    tactile_dim_in=config.tactile_dim_in,
+                    tactile_history=self.tactile_history,
+                    has_reference_frame=config.tactile_use_reference_frame,
+                    diff_from_reference=config.tactile_diff_from_reference,
+                    expert_width=suffix_width,
+                    rngs=rngs,
+                )
 
         # Action / time path.
         if config.pi05:
@@ -153,13 +179,23 @@ class Pi0(_model.BaseModel):
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
-    def _encode_tactile(self, tactile: jax.Array) -> at.Float[at.Array, "b emb"]:
-        """将 Observation.tactile 编码为单个 embedding token。"""
+    def _encode_tactile_suffix(self, tactile: jax.Array) -> at.Float[at.Array, "b emb"]:
+        """将 Observation.tactile_suffix 编码为单个 decoder-suffix embedding token。"""
         if tactile is None:
-            raise ValueError("Tactile encoder was called but observation.tactile is None.")
-        if self.tactile_encoder is None:
-            raise ValueError("Tactile encoder is not initialized but was called.")
-        return self.tactile_encoder(tactile)
+            raise ValueError("Suffix tactile encoder was called but observation.tactile_suffix is None.")
+        encoder = self.tactile_suffix_encoder
+        if encoder is None:
+            raise ValueError("Suffix tactile encoder is not initialized but was called.")
+        return encoder(tactile)
+
+    def _encode_tactile_prefix(self, tactile: jax.Array) -> at.Float[at.Array, "b emb"]:
+        """将 Observation.tactile_prefix 编码为单个 encoder-prefix embedding token。"""
+        if tactile is None:
+            raise ValueError("Prefix tactile encoder was called but observation.tactile_prefix is None.")
+        encoder = self.tactile_prefix_encoder or self.tactile_encoder
+        if encoder is None:
+            raise ValueError("Prefix tactile encoder is not initialized but was called.")
+        return encoder(tactile)
 
     def _process_tactile_tokens(
         self, obs: _model.Observation, mode: str
@@ -169,21 +205,22 @@ class Pi0(_model.BaseModel):
         input_mask_list: list[jax.Array] = []
         ar_mask_list: list[bool] = []
 
-        if obs.tactile is None or self.tactile_type is TactileType.NO:
+        if self.tactile_type is TactileType.NO:
             return tokens_list, input_mask_list, ar_mask_list
 
         # suffix tokens will not be attended by postfix tokens
         ar_mask_value = mode == "suffix"
 
         if self.tactile_type is TactileType.EXPERT_HIS_C_FUT:
-            # decoder 版本（默认）：只在 suffix 前加 tactile token。
-            use_in_suffix = mode == "suffix" and not self.tactile_in_prefix_only
-            # encoder 版本：只在 prefix 里加 tactile token。
-            use_in_prefix = mode == "prefix" and self.tactile_in_prefix_only
-
-            if use_in_suffix or use_in_prefix:
-                # 将多帧历史 tactile 编码成单个 expert / conditioning token。
-                tactile_token = self._encode_tactile(obs.tactile)[:, None, :]
+            # encoder-prefix 通道：从 Observation.tactile_prefix 读取，经 prefix encoder 编码。
+            if mode == "prefix" and "tactile_prefix" in self.tactile_streams and obs.tactile_prefix is not None:
+                tactile_token = self._encode_tactile_prefix(obs.tactile_prefix)[:, None, :]
+                tokens_list.append(tactile_token)
+                input_mask_list.append(jnp.ones(tactile_token.shape[:2], dtype=jnp.bool_))
+                ar_mask_list.append(ar_mask_value)
+            # decoder-suffix 通道：从 Observation.tactile_suffix（原 tacforce 通道）读取，经 suffix encoder 编码。
+            if mode == "suffix" and "tactile_suffix" in self.tactile_streams and obs.tactile_suffix is not None:
+                tactile_token = self._encode_tactile_suffix(obs.tactile_suffix)[:, None, :]
                 tokens_list.append(tactile_token)
                 input_mask_list.append(jnp.ones(tactile_token.shape[:2], dtype=jnp.bool_))
                 ar_mask_list.append(ar_mask_value)
