@@ -353,22 +353,4 @@ def restore_params(
     if all(kp[-1] == "value" for kp in flat_params):
         flat_params = {kp[:-1]: v for kp, v in flat_params.items()}
 
-    # Backwards compatibility: migrate old effort_* parameter names to tactile_*.
-    migrated_flat_params: dict = {}
-    has_effort = False
-    for kp, v in flat_params.items():
-        path_str = "/".join(kp)
-        new_path_str = path_str
-        if "effort_proj_in" in path_str or "effort_proj_out" in path_str:
-            has_effort = True
-            new_path_str = (
-                new_path_str.replace("effort_proj_in", "tactile_proj_in")
-                .replace("effort_proj_out", "tactile_proj_out")
-            )
-        new_kp = tuple(new_path_str.split("/"))
-        migrated_flat_params[new_kp] = v
-
-    if has_effort:
-        flat_params = migrated_flat_params
-
     return traverse_util.unflatten_dict(flat_params)

@@ -78,8 +78,6 @@ class Pi0(_model.BaseModel):
         # 有效 action 维度：用于 loss 中的 [动作, 力矩] 切分。
         # 允许数据只在前 K 维有意义，其余为 padding。
         self.effective_action_dim = config.effective_action_dim
-        # 控制 tactile token 只放在 prefix（encoder）还是只放在 suffix（decoder）。
-        self.tactile_in_prefix_only = config.tactile_in_prefix_only
         # 力 / 触觉 loss 的权重（total_loss = action_loss + tactile_loss_weight * tactile_loss）。
         self.tactile_loss_weight = config.tactile_loss_weight
 
@@ -125,24 +123,27 @@ class Pi0(_model.BaseModel):
             # Encoder-prefix 触觉（例如 Tabero marker motion，经 TCN 编码）。
             if use_prefix and config.tactile_prefix_dim_in is not None and config.tactile_prefix_dim_in > 0:
                 prefix_width = paligemma_config.width
+                if config.tactile_prefix_encoder_type is None:
+                    raise ValueError(
+                        "Prefix tactile stream is enabled but Pi0Config.tactile_prefix_encoder_type is None. "
+                        "Please set tactile_prefix_encoder_type explicitly (e.g., 'tcn' or 'mlp')."
+                    )
+                if config.tactile_prefix_use_reference_frame is None:
+                    raise ValueError(
+                        "Prefix tactile stream is enabled but Pi0Config.tactile_prefix_use_reference_frame is None. "
+                        "Please set tactile_prefix_use_reference_frame explicitly (True/False)."
+                    )
+                if config.tactile_prefix_diff_from_reference is None:
+                    raise ValueError(
+                        "Prefix tactile stream is enabled but Pi0Config.tactile_prefix_diff_from_reference is None. "
+                        "Please set tactile_prefix_diff_from_reference explicitly (True/False)."
+                    )
                 self.tactile_prefix_encoder = _tactile_encoder.create_tactile_encoder(
-                    encoder_type=(
-                        config.tactile_prefix_encoder_type
-                        if config.tactile_prefix_encoder_type is not None
-                        else "tcn"
-                    ),
+                    encoder_type=config.tactile_prefix_encoder_type,
                     tactile_dim_in=config.tactile_prefix_dim_in,
                     tactile_history=config.tactile_prefix_history,
-                    has_reference_frame=(
-                        config.tactile_prefix_use_reference_frame
-                        if config.tactile_prefix_use_reference_frame is not None
-                        else False
-                    ),
-                    diff_from_reference=(
-                        config.tactile_prefix_diff_from_reference
-                        if config.tactile_prefix_diff_from_reference is not None
-                        else True
-                    ),
+                    has_reference_frame=config.tactile_prefix_use_reference_frame,
+                    diff_from_reference=config.tactile_prefix_diff_from_reference,
                     expert_width=prefix_width,
                     rngs=rngs,
                 )
@@ -192,7 +193,7 @@ class Pi0(_model.BaseModel):
         """将 Observation.tactile_prefix 编码为单个 encoder-prefix embedding token。"""
         if tactile is None:
             raise ValueError("Prefix tactile encoder was called but observation.tactile_prefix is None.")
-        encoder = self.tactile_prefix_encoder or self.tactile_encoder
+        encoder = self.tactile_prefix_encoder
         if encoder is None:
             raise ValueError("Prefix tactile encoder is not initialized but was called.")
         return encoder(tactile)

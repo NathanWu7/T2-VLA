@@ -49,9 +49,6 @@ class Pi0Config(_model.BaseModelConfig):
     # 但真实只有前 K 维有意义时，可以把 effective_action_dim 设为 K，用于 loss 中的动作/力矩切分。
     # 默认为 action_dim，保持向后兼容。
     effective_action_dim: int | None = None
-    # Tactile token 位置：默认为仅在 suffix（decoder）侧插入；
-    # 当 tactile_in_prefix_only=True 时，仅在 prefix（encoder）侧插入。
-    tactile_in_prefix_only: bool = False
     # 触觉 / 力损失的权重：total_loss = action_loss + tactile_loss_weight * tactile_loss。
     # 仅在 tactile_type 为 EXPERT_HIS_C_FUT 时生效。
     tactile_loss_weight: float = 0.1

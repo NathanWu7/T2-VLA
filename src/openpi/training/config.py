@@ -998,7 +998,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi0_base/params",
         ),
-        num_train_steps=30_000,
+        num_train_steps=60_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1030,7 +1030,6 @@ _CONFIGS = [
             tactile_encoder_type="mlp",
             tactile_use_reference_frame=False,
             tactile_diff_from_reference=True,
-            tactile_in_prefix_only=False,
             # encoder-prefix：tacfield（9 帧 marker motion），reshape 成 [9, 198*2]，经 TCN 编码。
             tactile_prefix_dim_in=9 * 198 * 2,
             tactile_prefix_history=TABERO_TACTILE_HISTORY,
@@ -1056,7 +1055,7 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi0_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=30_000,
+        num_train_steps=60_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1094,7 +1093,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi0_base/params",
         ),
-        num_train_steps=30_000,
+        num_train_steps=60_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1138,7 +1137,7 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=30_000,
+        num_train_steps=60_000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
@@ -1156,21 +1155,15 @@ _CONFIGS = [
             effective_action_dim=13,
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
-            # Tabero 力场：tactile_marker_motion 形状为 [9, 198, 2]，
-            # 在 TaberoTacFieldInputs 中先 reshape 成 [9, 198*2]，然后在模型内部使用 TCN：
-            # - 第 1 帧作为“基准帧”（无接触）；
-            # - 后 8 帧每一帧都减去基准帧，形成 8 帧历史；
-            # - 因此 tactile_dim_in 仍然是 9 * 198 * 2（1+8 帧），但 history=TABERO_TACTILE_HISTORY。
-            tactile_dim_in=9 * 198 * 2,
-            # 历史长度 H：TABERO_TACTILE_HISTORY 帧接触历史（例如 8），
-            # 但在 full-seq 模式下实际 TCN 序列长度为 1+H（基准 + 历史），仍使用 H 作为超参。
-            tactile_history=TABERO_TACTILE_HISTORY,
-            # 使用 TCN（时序卷积网络）作为 marker motion 的 tactile tokenizer，
-            # 且直接使用 [基准 + 8 帧接触] 共 9 帧做 TCN，不做差分；
-            # 通过 tactile_diff_from_reference 可切换回“差分版”。
-            tactile_encoder_type="tcn",
-            tactile_use_reference_frame=True,
-            tactile_diff_from_reference=False,
+            # prefix：Tabero 力场 marker_motion，形状 [9, 198, 2] → reshape 成 [9, 198*2]，走 TCN。
+            # 注意：这里是 encoder-prefix 通道，因此使用 tactile_prefix_* 字段显式配置；
+            # 同时关闭 suffix tactile encoder（tactile_dim_in=0）。
+            tactile_dim_in=0,
+            tactile_prefix_dim_in=9 * 198 * 2,
+            tactile_prefix_history=TABERO_TACTILE_HISTORY,
+            tactile_prefix_encoder_type="tcn",
+            tactile_prefix_use_reference_frame=True,
+            tactile_prefix_diff_from_reference=False,
             # 只启用 encoder-prefix 触觉通道（tacfield）。
             tactile_streams=("tactile_prefix",),
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
@@ -1191,7 +1184,7 @@ _CONFIGS = [
             # 新增的 tactile_proj_* 参数在 base checkpoint 里不存在，允许缺失。
             missing_regex=".*",
         ),
-        num_train_steps=30_000,
+        num_train_steps=60_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1230,7 +1223,7 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi0_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=30_000,
+        num_train_steps=60_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1627,8 +1620,13 @@ _CONFIGS = [
             effective_action_dim=13,
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
-            tactile_dim_in=8 * 6,
-            tactile_history=TABERO_TACTILE_HISTORY,
+            # prefix-only：8×6 指力历史只作为 encoder-prefix token，suffix 不创建 tactile encoder。
+            tactile_dim_in=0,
+            tactile_prefix_dim_in=8 * 6,
+            tactile_prefix_history=TABERO_TACTILE_HISTORY,
+            tactile_prefix_encoder_type="mlp",
+            tactile_prefix_use_reference_frame=False,
+            tactile_prefix_diff_from_reference=True,
             tactile_streams=("tactile_prefix",),
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
