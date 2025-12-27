@@ -25,19 +25,19 @@ cd "${ROOT_DIR}"
 echo "[INFO] 当前工程根目录: ${ROOT_DIR}"
 
 # Hugging Face 模型仓库（你的 pi0_tabero_force）
-HF_REPO_URL="https://huggingface.co/NathanWu7/pi0_tabero_force"
+HF_REPO_URL="https://huggingface.co/NathanWu7/pi0_lora_tacimg_tabero"
 
 # 本地 clone 位置（可以按需修改）
-HF_REPO_DIR="${HOME}/hf/pi0_tabero_force"
+HF_REPO_DIR="${HOME}/hf/pi0_lora_tacimg_tabero"
 
 # 训练 config / 实验名
-CONFIG_NAME="pi0_libero_force_low_mem_finetune"
-EXP_NAME="force_test2"
+CONFIG_NAME="pi0_lora_tacimg_tabero"
+EXP_NAME="pi0_lora_tacimg_tabero"
 
 # 想要使用的 checkpoint step，默认 49999。
 # 可以通过第一个命令行参数覆盖：
 #   bash serve_pi0_tabero_force.sh 39999
-CKPT_STEP="${1:-49999}"
+CKPT_STEP="${1:-59999}"
 
 ########################
 # 基本检查
