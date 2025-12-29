@@ -52,6 +52,11 @@ class Pi0Config(_model.BaseModelConfig):
     # 触觉 / 力损失的权重：total_loss = action_loss + tactile_loss_weight * tactile_loss。
     # 仅在 tactile_type 为 EXPERT_HIS_C_FUT 时生效。
     tactile_loss_weight: float = 0.1
+    # Padding 维度（effective_action_dim 之后）loss 权重：
+    # - 0.0：忽略 padding 维度（当前 Tabero-force 方案的默认行为）
+    # - 1.0：对 padding 维度也计算 loss（等价于“强制把 padding 维度回归到 0”，适合对齐官方 checkpoint 的默认训练范式）
+    # 仅在 tactile_type 为 EXPERT_HIS_C_FUT 且 effective_action_dim < action_dim 时生效。
+    padding_loss_weight: float = 1.0
     # Tactile 编码器类型：
     # - "mlp"：使用旧版 flatten+MLP（向后兼容，默认）
     # - "tcn"：使用时序卷积网络（TCN）作为 tactile tokenizer（例如 Tabero tacfield marker motion）

@@ -99,14 +99,26 @@ def main(config_name: str, max_frames: int | None = None):
             data_config, config.model.action_horizon, config.batch_size, config.model, config.num_workers, max_frames
         )
 
-    keys = ["state", "actions"]
+    # NOTE:
+    # - 默认官方 OpenPI 只统计 state/actions。
+    # - 本工程额外支持 tactile_prefix/tactile_suffix（如果 batch 中存在），以便训练时通过
+    #   transforms.Normalize(norm_stats, ...) 对触觉也做同样的 z-score / quantile 归一化。
+    keys = ["state", "actions", "tactile_prefix", "tactile_suffix"]
     stats = {key: normalize.RunningStats() for key in keys}
 
     for batch in tqdm.tqdm(data_loader, total=num_batches, desc="Computing stats"):
+        # 兼容：不同数据配置可能不提供 tactile_* 字段，因此这里做存在性判断。
         for key in keys:
+            if key not in batch:
+                continue
             stats[key].update(np.asarray(batch[key]))
 
-    norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
+    # 只保存“至少更新过一次”的字段，避免保存空统计量导致误用。
+    norm_stats = {
+        key: rs.get_statistics()
+        for key, rs in stats.items()
+        if getattr(rs, "_count", 0) >= 2
+    }
 
     output_path = config.assets_dirs / data_config.repo_id
     print(f"Writing stats to: {output_path}")

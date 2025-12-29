@@ -991,8 +991,8 @@ _CONFIGS = [
             extra_delta_transform=True,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         # 使用官方 pi0 base checkpoint 初始化，再做 LoRA 微调。
         weight_loader=weight_loaders.CheckpointWeightLoader(
@@ -1039,8 +1039,8 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=TaberoTacAllDataConfig(
             repo_id="NathanWu7/tabero",
@@ -1080,8 +1080,8 @@ _CONFIGS = [
             tactile_loss_weight=0.0,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=TaberoNoTactNoForceDataConfig(
             repo_id="NathanWu7/tabero",
@@ -1123,8 +1123,8 @@ _CONFIGS = [
             tactile_loss_weight=0.0,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=TaberoNoTactNoForceDataConfig(
             repo_id="NathanWu7/tabero",
@@ -1169,8 +1169,8 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=TaberoTacFieldDataConfig(
             repo_id="NathanWu7/tabero",
@@ -1209,8 +1209,8 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=TaberoTacForceDataConfig(
             repo_id="NathanWu7/tabero",
@@ -1255,8 +1255,8 @@ _CONFIGS = [
             extra_delta_transform=True,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi05_base/params",
@@ -1295,8 +1295,8 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=TaberoTacFieldDataConfig(
             repo_id="NathanWu7/tabero",
@@ -1342,8 +1342,8 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=SimpleDataConfig(
             assets=AssetsConfig(asset_id="tabero"),
@@ -1397,8 +1397,8 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=TaberoTacAllDataConfig(
             repo_id="NathanWu7/tabero",
@@ -1440,8 +1440,8 @@ _CONFIGS = [
             tactile_loss_weight=0.0,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=LeRobotLiberoNoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
@@ -1479,8 +1479,8 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=LeRobotLiberoTactileDataConfig(
             # 使用你在 Hugging Face 上的 LeRobot 数据集仓库作为 repo_id。
@@ -1566,9 +1566,9 @@ _CONFIGS = [
         batch_size=32,
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=10_000,
-            peak_lr=5e-5,
+            peak_lr=1e-4,
             decay_steps=1_000_000,
-            decay_lr=5e-5,
+            decay_lr=1e-4,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
@@ -1590,8 +1590,8 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=LeRobotLiberoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
@@ -1631,8 +1631,8 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.25e-5,
-            decay_lr=1.25e-6,
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
         ),
         data=LeRobotLiberoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",

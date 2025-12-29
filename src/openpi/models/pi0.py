@@ -80,6 +80,8 @@ class Pi0(_model.BaseModel):
         self.effective_action_dim = config.effective_action_dim
         # 力 / 触觉 loss 的权重（total_loss = action_loss + tactile_loss_weight * tactile_loss）。
         self.tactile_loss_weight = config.tactile_loss_weight
+        # 对 effective_action_dim 之后 padding 维度的 loss 权重（默认 0：忽略 padding；>0：也监督 padding）。
+        self.padding_loss_weight = getattr(config, "padding_loss_weight", 0.0)
 
         # 仅禁止尚未实现的 TactileType 组合；允许 pi05 + EXPERT_HIS_C_FUT。
         if self.pi05 and self.tactile_type not in (TactileType.NO, TactileType.EXPERT_HIS_C_FUT):
@@ -386,15 +388,24 @@ class Pi0(_model.BaseModel):
             )
 
             total_loss = action_loss + self.tactile_loss_weight * tactile_loss
+            pad_loss = None
+            if self.padding_loss_weight and effective_ad < self.action_dim:
+                # 也对 padding 维度计算 loss（等价于“强制 padding 维度回归到 0”）。
+                pad_slice = slice(effective_ad, self.action_dim)
+                pad_loss = jnp.mean(jnp.square(v_t[..., pad_slice] - u_t[..., pad_slice]), axis=-1)
+                total_loss = total_loss + self.padding_loss_weight * pad_loss
             if return_components:
                 # 为了减小 aux 体积，仅返回 batch+time 维度上聚合后的 scalar 分量，
                 # 避免在训练循环中携带完整 [*b, ah] 张量，减少内存与通信开销。
                 action_loss_mean = jnp.mean(action_loss)
                 tactile_loss_mean = jnp.mean(tactile_loss)
-                return total_loss, {
+                aux = {
                     "action_loss": action_loss_mean,
                     "tactile_loss": tactile_loss_mean,
                 }
+                if pad_loss is not None:
+                    aux["padding_loss"] = jnp.mean(pad_loss)
+                return total_loss, aux
             return total_loss
 
         total_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
