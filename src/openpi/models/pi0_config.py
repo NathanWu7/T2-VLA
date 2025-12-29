@@ -57,6 +57,14 @@ class Pi0Config(_model.BaseModelConfig):
     # - 1.0：对 padding 维度也计算 loss（等价于“强制把 padding 维度回归到 0”，适合对齐官方 checkpoint 的默认训练范式）
     # 仅在 tactile_type 为 EXPERT_HIS_C_FUT 且 effective_action_dim < action_dim 时生效。
     padding_loss_weight: float = 1.0
+    # EXPERT_HIS_C_FUT 的 loss 计算模式：
+    # - "split"：当前默认实现。按 [动作段, 力段, padding 段] 分别计算 MSE（各自按段内维度取 mean）
+    #            再按权重相加：action_loss + w*tactile_loss (+ pad_w*pad_loss)。
+    # - "weighted_full"：一次性对整条 action 向量做加权 MSE：
+    #            mean( w[d] * (v_t - u_t)^2 )，其中 w[d] 在不同维度段取不同常数。
+    #            注意：该模式下“除数”固定为 action_dim（例如 32），更贴近“整体 MSE”的直觉。
+    # 仅在 tactile_type 为 EXPERT_HIS_C_FUT 时生效。
+    expert_his_c_fut_loss_mode: str = "weighted_full"
     # Tactile 编码器类型：
     # - "mlp"：使用旧版 flatten+MLP（向后兼容，默认）
     # - "tcn"：使用时序卷积网络（TCN）作为 tactile tokenizer（例如 Tabero tacfield marker motion）

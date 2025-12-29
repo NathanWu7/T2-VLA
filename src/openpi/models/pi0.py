@@ -82,6 +82,8 @@ class Pi0(_model.BaseModel):
         self.tactile_loss_weight = config.tactile_loss_weight
         # 对 effective_action_dim 之后 padding 维度的 loss 权重（默认 0：忽略 padding；>0：也监督 padding）。
         self.padding_loss_weight = getattr(config, "padding_loss_weight", 0.0)
+        # EXPERT_HIS_C_FUT 的 loss 计算模式（默认 split，向后兼容）。
+        self.expert_his_c_fut_loss_mode = getattr(config, "expert_his_c_fut_loss_mode", "split")
 
         # 仅禁止尚未实现的 TactileType 组合；允许 pi05 + EXPERT_HIS_C_FUT。
         if self.pi05 and self.tactile_type not in (TactileType.NO, TactileType.EXPERT_HIS_C_FUT):
@@ -378,22 +380,39 @@ class Pi0(_model.BaseModel):
                     "EXPERT_HIS_C_FUT requires effective_action_dim "
                     f"({effective_ad}) > tactile_dim ({self.tactile_dim})."
                 )
+            # 组件分量（用于日志/对齐）：按维度段分别计算 MSE（段内取 mean）。
             # 动作损失：只在前 ctrl_dim 维计算（例如 7 个关节）。
-            action_loss = jnp.mean(jnp.square(v_t[..., :ctrl_dim] - u_t[..., :ctrl_dim]), axis=-1)
-            # 触觉力损失：紧接着的 tactile_dim 维（例如第 8–13 维），其余 padding 维度忽略。
+            action_err2 = jnp.square(v_t[..., :ctrl_dim] - u_t[..., :ctrl_dim])
+            action_loss = jnp.mean(action_err2, axis=-1)
+            # 触觉力损失：紧接着的 tactile_dim 维（例如第 8–13 维）。
             tactile_slice = slice(ctrl_dim, ctrl_dim + self.tactile_dim)
-            tactile_loss = jnp.mean(
-                jnp.square(v_t[..., tactile_slice] - u_t[..., tactile_slice]),
-                axis=-1,
-            )
+            tactile_err2 = jnp.square(v_t[..., tactile_slice] - u_t[..., tactile_slice])
+            tactile_loss = jnp.mean(tactile_err2, axis=-1)
 
-            total_loss = action_loss + self.tactile_loss_weight * tactile_loss
             pad_loss = None
-            if self.padding_loss_weight and effective_ad < self.action_dim:
-                # 也对 padding 维度计算 loss（等价于“强制 padding 维度回归到 0”）。
+            if effective_ad < self.action_dim:
                 pad_slice = slice(effective_ad, self.action_dim)
-                pad_loss = jnp.mean(jnp.square(v_t[..., pad_slice] - u_t[..., pad_slice]), axis=-1)
-                total_loss = total_loss + self.padding_loss_weight * pad_loss
+                pad_err2 = jnp.square(v_t[..., pad_slice] - u_t[..., pad_slice])
+                pad_loss = jnp.mean(pad_err2, axis=-1)
+
+            # 两种 loss 模式：
+            # - split：与旧实现一致，按段内 MSE 相加（每段各自按段内维度 mean）。
+            # - weighted_full：一次性整向量加权 MSE（按 action_dim mean，更贴近“除以 32”的直觉）。
+            if self.expert_his_c_fut_loss_mode == "weighted_full":
+                err2 = jnp.square(v_t - u_t)  # [..., ah, action_dim]
+                w = jnp.ones((self.action_dim,), dtype=err2.dtype)
+                # 力段权重（其余有效动作段权重为 1）
+                w = w.at[tactile_slice].set(self.tactile_loss_weight)
+                # padding 段权重（0 表示忽略；1 表示参与整体 MSE；也可设为其他值）
+                if effective_ad < self.action_dim:
+                    pad_w = self.padding_loss_weight if self.padding_loss_weight else 0.0
+                    w = w.at[pad_slice].set(pad_w)
+                total_loss = jnp.mean(err2 * w, axis=-1)
+            else:
+                # 默认 split：与旧实现一致
+                total_loss = action_loss + self.tactile_loss_weight * tactile_loss
+                if self.padding_loss_weight and pad_loss is not None:
+                    total_loss = total_loss + self.padding_loss_weight * pad_loss
             if return_components:
                 # 为了减小 aux 体积，仅返回 batch+time 维度上聚合后的 scalar 分量，
                 # 避免在训练循环中携带完整 [*b, ah] 张量，减少内存与通信开销。
