@@ -97,10 +97,11 @@ class Observation(Generic[ArrayT]):
     state: at.Float[ArrayT, "*b s"]
     # Decoder-suffix 触觉 / 力矩历史（例如 8×6 指力），形状约定：[*b, n, e]。
     # 当未使用触觉时为 None。
-    tactile_suffix: at.Float[ArrayT, "*b n e"] | None = None
+    # 注意：suffix/prefix 的时间长度与特征维度可能不同，因此不能复用同一组轴名（否则 jaxtyping 会强制它们一致）。
+    tactile_suffix: at.Float[ArrayT, "*b n_suffix e_suffix"] | None = None
     # Encoder-prefix 触觉历史（例如 Tabero 9 帧 marker motion，经 reshape 后的 [*b, n, e]）。
     # 仅在 dual_tactile=True 且相应数据流提供时使用。
-    tactile_prefix: at.Float[ArrayT, "*b n e"] | None = None
+    tactile_prefix: at.Float[ArrayT, "*b n_prefix e_prefix"] | None = None
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
