@@ -23,22 +23,22 @@ set -euo pipefail
 ########################
 
 # HF 仓库 id（模型 + norm_stats 都放这里）
-HF_REPO_ID="NathanWu7/pi0_lora_tacfield_tabero"
+HF_REPO_ID="NathanWu7/pi0_lora_tacall_tabero"
 HF_REPO_TYPE="model"   # 你也可以改成 "dataset"
 
 # 训练 config 名 + 实验名（和 train_force_test.sh 保持一致）
-CONFIG_NAME="pi0_lora_tacfield_tabero"
-EXP_NAME="pi0_lora_tacfield_tabero"
+CONFIG_NAME="pi0_lora_tacall_tabero"
+EXP_NAME="pi0_lora_tacall_tabero"
 
 # 想要导出的 checkpoint step（子目录名），例如 "29999"。
 # 为空则导出整个实验目录（不推荐，一般只导出一个或少数几个 step）。
-CKPT_STEP="59999"
+CKPT_STEP="49999"
 
 # 训练 / 统计时用到的 repo_id（HF 数据集）
 DATA_REPO_ID="NathanWu7/tabero"
 
 # 本地导出目录（脚本会自动创建/覆盖）
-EXPORT_DIR="export/pi0_lora_tacfield_tabero"
+EXPORT_DIR="export/pi0_lora_tacall_tabero"
 
 ########################
 # 脚本开始

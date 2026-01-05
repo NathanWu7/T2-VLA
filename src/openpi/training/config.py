@@ -998,7 +998,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi0_base/params",
         ),
-        num_train_steps=60_000,
+        num_train_steps=50_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1055,7 +1055,7 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi0_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=60_000,
+        num_train_steps=50_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1093,7 +1093,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi0_base/params",
         ),
-        num_train_steps=60_000,
+        num_train_steps=50_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1137,7 +1137,7 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=60_000,
+        num_train_steps=50_000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
@@ -1184,7 +1184,7 @@ _CONFIGS = [
             # 新增的 tactile_proj_* 参数在 base checkpoint 里不存在，允许缺失。
             missing_regex=".*",
         ),
-        num_train_steps=60_000,
+        num_train_steps=50_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1223,7 +1223,7 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi0_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=60_000,
+        num_train_steps=50_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
