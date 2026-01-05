@@ -51,11 +51,37 @@ class WebsocketPolicyServer:
 
         await websocket.send(packer.pack(self._metadata))
 
+        def _decode_bytes_keys(obj):
+            """Recursively convert any bytes dict keys coming from msgpack into str.
+
+            This avoids JAX / flax pytree utilities trying to sort mixed bytes/str keys,
+            which raises `TypeError: '<' not supported between instances of 'bytes' and 'str'`.
+            """
+            if isinstance(obj, dict):
+                new_obj = {}
+                for k, v in obj.items():
+                    if isinstance(k, bytes):
+                        try:
+                            k_decoded = k.decode("utf-8")
+                        except Exception:
+                            # Fallback: safer string representation on bad encodings.
+                            k_decoded = str(k)
+                        new_obj[k_decoded] = _decode_bytes_keys(v)
+                    else:
+                        new_obj[k] = _decode_bytes_keys(v)
+                return new_obj
+            if isinstance(obj, (list, tuple)):
+                t = type(obj)
+                return t(_decode_bytes_keys(x) for x in obj)
+            return obj
+
         prev_total_time = None
         while True:
             try:
                 start_time = time.monotonic()
                 obs = msgpack_numpy.unpackb(await websocket.recv())
+                # Normalize any bytes keys into plain strings before passing to the policy.
+                obs = _decode_bytes_keys(obs)
 
                 infer_time = time.monotonic()
                 action = self._policy.infer(obs)

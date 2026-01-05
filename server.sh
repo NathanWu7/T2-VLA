@@ -143,6 +143,12 @@ echo "[INFO] 启动 WebSocket policy server..."
 # 启动服务
 ########################
 
+# Workaround for `uv` installing deps (e.g. `lerobot`) from GitHub with git-lfs:
+# some upstream LFS objects may be missing and break checkout.
+# These artifacts are not needed for serving, so we skip LFS smudge by default.
+: "${GIT_LFS_SKIP_SMUDGE:=1}"
+export GIT_LFS_SKIP_SMUDGE
+
 uv run scripts/serve_policy.py \
   --port "${PORT}" \
   policy:checkpoint \
