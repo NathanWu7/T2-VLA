@@ -63,6 +63,15 @@ def create_trained_policy(
             raise ValueError("Asset id is required to load norm stats.")
         norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
 
+    # NOTE:
+    # Policy.infer() only returns {"state", "actions"} (plus timing). Some training setups also
+    # include additional normalized inputs like tactile_prefix/tactile_suffix in norm_stats.
+    # Output-side Unnormalize is strict by design, so we must avoid passing stats for keys that
+    # will never appear in the policy output tree.
+    output_norm_stats = None
+    if norm_stats is not None:
+        output_norm_stats = {k: v for k, v in norm_stats.items() if k in ("state", "actions")}
+
     # Determine the device to use for PyTorch models
     if is_pytorch and pytorch_device is None:
         try:
@@ -83,7 +92,7 @@ def create_trained_policy(
         ],
         output_transforms=[
             *data_config.model_transforms.outputs,
-            transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            transforms.Unnormalize(output_norm_stats, use_quantiles=data_config.use_quantile_norm),
             *data_config.data_transforms.outputs,
             *repack_transforms.outputs,
         ],
