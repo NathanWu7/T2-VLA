@@ -182,10 +182,14 @@ class DataConfigFactory(abc.ABC):
         """Create a data config."""
 
     def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
-        asset_id = self.assets.asset_id or repo_id
+        # NOTE:
+        # Some configs (e.g. SimpleDataConfig) may specify `repo_id` via `base_config=DataConfig(repo_id=...)`
+        # instead of setting `DataConfigFactory.repo_id` directly. In that case we must NOT override it with None.
+        base = self.base_config or DataConfig()
+        repo_id = self.repo_id if self.repo_id is not tyro.MISSING else base.repo_id
+        asset_id = self.assets.asset_id or base.asset_id or repo_id
         return dataclasses.replace(
-            self.base_config or DataConfig(),
+            base,
             repo_id=repo_id,
             asset_id=asset_id,
             norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
@@ -565,7 +569,7 @@ class TaberoNoTactNoForceDataConfig(DataConfigFactory):
     """
     Tabero（多路图像 + 只用 7D 关节动作，不使用任何 tactile / 指力）的数据配置。
 
-    - 图像：image, wrist_image, tactile_image（第三路当作普通视觉使用）
+    - 图像：只用 image / wrist_image；第三路 right_wrist_0_rgb 用零图 + mask=False（与原始 LiberoInputs 一致）
     - 动作：原始 13D（7 关节 + 6 力）在这里通过 SliceActions(7) 截断为 7D，只训练关节，
       后 6 维力完全从 loss 中“屏蔽掉”，行为与原始 pi0_libero_wo_force 类似。
     """
@@ -583,6 +587,48 @@ class TaberoNoTactNoForceDataConfig(DataConfigFactory):
                 _transforms.SliceActions(7),
             ],
             outputs=[libero_policy.LiberoOutputs()],
+        )
+
+        if self.extra_delta_transform:
+            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class TaberoNoTactForceDataConfig(DataConfigFactory):
+    """
+    Tabero（纯视觉两路图像 + 13D 动作/力预测，不使用任何 tactile token / tactile 图像）。
+
+    与 `TaberoNoTactNoForceDataConfig` 的唯一区别：
+    - 不再 SliceActions(7)，而是保留原始 13D（7 关节 + 6 力）用于训练监督与推理输出；
+    - 输出使用 `LiberoForceOutputs()`，只返回前 13 维。
+
+    图像侧仍与 notac 一致：
+    - 只读 image / wrist_image；
+    - 第三路 right_wrist_0_rgb 用零图 + mask=False（PI0 下默认 mask 掉）。
+    """
+
+    extra_delta_transform: bool = True
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        data_transforms = _transforms.Group(
+            inputs=[
+                # 只用两路图像（image / wrist_image）+ state + 13D actions，不读取 tactile_image / tactile_force 等任何触觉模态。
+                libero_policy.TaberoNoTactInputs(model_type=model_config.model_type),
+            ],
+            outputs=[libero_policy.LiberoForceOutputs()],
         )
 
         if self.extra_delta_transform:
@@ -982,7 +1028,7 @@ _CONFIGS = [
         ),
         data=TaberoTacImgDataConfig(
             # 你的原始 Tabero 数据集（含 tactile_image / tactile_gripper_force 等字段）。
-            repo_id="NathanWu7/tabero",
+            repo_id="NathanWu7/tabero_object_25",
             base_config=DataConfig(
                 # 如果在 LeRobot meta 里有 tasks 信息，可以启用从 task 里自动生成 prompt。
                 prompt_from_task=True,
@@ -1043,7 +1089,7 @@ _CONFIGS = [
             decay_lr=2.5e-6,
         ),
         data=TaberoTacAllDataConfig(
-            repo_id="NathanWu7/tabero",
+            repo_id="NathanWu7/tabero_object_25",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -1063,27 +1109,56 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi0_lora_notac_tabero",
-        # Tabero 基线：使用三路图像（image / wrist_image / tactile_image）作为纯视觉输入，
-        # 只训练前 7 维关节动作，不使用任何 tactile token，也不对后 6 维指力做监督。
+        # Tabero 纯视觉基线（标准 Pi0）：
+        # - 图像：只用两路（image / wrist_image）；第三路 right_wrist_0_rgb 用零图并在 PI0 下默认 mask 掉
+        #   （TaberoNoTactInputs：right_wrist_0_rgb = 0, image_mask=False）。
+        # - 动作：仅训练前 7 维关节动作（SliceActions(7)），不做任何力/触觉预测或监督。
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
-            # 使用与 force 版相同的 EXPERT_HIS_C_FUT loss 拆分逻辑，但关闭力的监督：
-            # - effective_action_dim=13：前 7 维是真实关节动作，后 6 维作为“力槽位”；
-            # - tactile_type=EXPERT_HIS_C_FUT：在 compute_loss 中按 [7 动作 + 6 力] 拆分；
-            # - tactile_dim_in=0：不创建 tactile token 相关 Linear，只启用 loss 拆分逻辑；
-            # - tactile_loss_weight=0.0：力的 loss 权重为 0，只剩 7 维动作 loss。
-            effective_action_dim=13,
-            tactile_type=TactileType.EXPERT_HIS_C_FUT,
-            tactile_dim=6,
-            tactile_dim_in=0,
-            tactile_loss_weight=0.0,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             peak_lr=2.5e-5,
             decay_lr=2.5e-6,
         ),
         data=TaberoNoTactNoForceDataConfig(
+            repo_id="NathanWu7/tabero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi0_base/params",
+        ),
+        num_train_steps=50_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi0_lora_tacpred_tabero",
+        # Tabero 纯视觉（与 notac 一致）但预测 13D 动作/力：
+        # - 图像：只用两路（image / wrist_image）；第三路 right_wrist_0_rgb 用零图并在 PI0 下默认 mask 掉。
+        # - 不读取任何 tactile_* 字段，也不注入 tactile token（tactile_dim_in=0 / tactile_streams=()）。
+        # - 训练/推理输出：前 13 维（7 关节 + 6 力），并对力段做加权监督（TACTILE_LOSS_WEIGHT）。
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            # 不创建任何 tactile tokenizer 权重，仅使用 EXPERT_HIS_C_FUT 的 loss 拆分逻辑。
+            tactile_dim_in=0,
+            tactile_streams=(),
+            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
+        ),
+        data=TaberoNoTactForceDataConfig(
             repo_id="NathanWu7/tabero",
             base_config=DataConfig(
                 prompt_from_task=True,
@@ -1173,7 +1248,7 @@ _CONFIGS = [
             decay_lr=2.5e-6,
         ),
         data=TaberoTacFieldDataConfig(
-            repo_id="NathanWu7/tabero",
+            repo_id="NathanWu7/tabero_object_25",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -1213,7 +1288,7 @@ _CONFIGS = [
             decay_lr=2.5e-6,
         ),
         data=TaberoTacForceDataConfig(
-            repo_id="NathanWu7/tabero",
+            repo_id="NathanWu7/tabero_object_25",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -1254,21 +1329,26 @@ _CONFIGS = [
             ),
             extra_delta_transform=True,
         ),
+        # 训练超参与 pi05_libero 对齐（batch_size / lr_schedule / optimizer / ema）
+        batch_size=256,
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=2.5e-5,
-            decay_lr=2.5e-6,
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
         ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=30_000,
+        num_train_steps=20_000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
-        ema_decay=None,
+        ema_decay=0.999,
     ),
     TrainConfig(
         name="pi05_tacfield_tabero",
@@ -1294,10 +1374,15 @@ _CONFIGS = [
             tactile_streams=("tactile_prefix",),
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
+        # 训练超参与 pi05_libero 对齐（batch_size / lr_schedule / optimizer / ema）
+        batch_size=256,
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=2.5e-5,
-            decay_lr=2.5e-6,
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
         ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         data=TaberoTacFieldDataConfig(
             repo_id="NathanWu7/tabero",
             base_config=DataConfig(
@@ -1309,13 +1394,13 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=30_000,
+        num_train_steps=20_000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
-        ema_decay=None,
+        ema_decay=0.999,
     ),
     TrainConfig(
         name="pi05_tacforce_tabero",
@@ -1341,10 +1426,15 @@ _CONFIGS = [
             tactile_streams=("tactile_prefix",),
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
+        # 训练超参与 pi05_libero 对齐（batch_size / lr_schedule / optimizer / ema）
+        batch_size=256,
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=2.5e-5,
-            decay_lr=2.5e-6,
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
         ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         data=SimpleDataConfig(
             assets=AssetsConfig(asset_id="tabero"),
             data_transforms=lambda model: _transforms.Group(
@@ -1360,13 +1450,13 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=30_000,
+        num_train_steps=20_000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
-        ema_decay=None,
+        ema_decay=0.999,
     ),
     TrainConfig(
         name="pi05_tacall_tabero",
@@ -1396,10 +1486,15 @@ _CONFIGS = [
             tactile_prefix_diff_from_reference=False,
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
+        # 训练超参与 pi05_libero 对齐（batch_size / lr_schedule / optimizer / ema）
+        batch_size=256,
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=2.5e-5,
-            decay_lr=2.5e-6,
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
         ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         data=TaberoTacAllDataConfig(
             repo_id="NathanWu7/tabero",
             base_config=DataConfig(
@@ -1411,13 +1506,13 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=30_000,
+        num_train_steps=20_000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
-        ema_decay=None,
+        ema_decay=0.999,
     ),
     TrainConfig(
         name="pi0_lora_noforce_taforce",
@@ -1589,9 +1684,13 @@ _CONFIGS = [
             tactile_streams=("tactile_suffix",),
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
+        # 训练超参与 pi05_libero 对齐（batch_size / lr_schedule / optimizer / ema）
+        batch_size=256,
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=2.5e-5,
-            decay_lr=2.5e-6,
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
         ),
         data=LeRobotLiberoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
@@ -1604,8 +1703,7 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=30_000,
-        batch_size=32,
+        num_train_steps=20_000,
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
     ),
@@ -1630,9 +1728,12 @@ _CONFIGS = [
             tactile_streams=("tactile_prefix",),
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
+        # 训练超参与 pi05_libero 对齐（batch_size / lr_schedule / optimizer / ema）
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=2.5e-5,
-            decay_lr=2.5e-6,
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
         ),
         data=LeRobotLiberoTactileDataConfig(
             repo_id="NathanWu7/tabero_force",
@@ -1645,7 +1746,7 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=30_000,
+        num_train_steps=20_000,
         batch_size=256,
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,

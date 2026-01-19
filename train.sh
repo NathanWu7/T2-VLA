@@ -18,11 +18,12 @@
 # uv run scripts/compute_norm_stats.py pi0_libero_force_low_mem_finetune
 #uv run scripts/compute_norm_stats.py --config-name pi0_lora_tacforce_tabero
 # 继续在 Tabero 力数据上训练（或恢复训练）
-uv run scripts/train.py pi0_lora_tacimg_tabero --exp-name=pi0_lora_tacimg_tabero --resume
+uv run scripts/compute_norm_stats.py --config-name pi0_lora_tacforce_tabero
+uv run scripts/train.py pi0_lora_tacforce_tabero --exp-name=pi0_lora_tacforce_tabero_25 --overwrite
 # 如需从头重跑同名实验，可以加上 --overwrite
 #   --overwrite
-uv run scripts/compute_norm_stats.py --config-name pi0_lora_tacfield_tabero
-uv run scripts/train.py pi0_lora_tacfield_tabero --exp-name=pi0_lora_tacfield_tabero --overwrite
+uv run scripts/compute_norm_stats.py --config-name pi0_lora_tacall_tabero
+uv run scripts/train.py pi0_lora_tacall_tabero --exp-name=pi0_lora_tacall_tabero_25 --overwrite
 ###############################################################################
 # 示例 2：三路图像 + 13D 动作（无 tactile token）—— pi0_lora_tacimg_force
 ###############################################################################
