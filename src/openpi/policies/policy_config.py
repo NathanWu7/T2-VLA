@@ -3,13 +3,17 @@ import os
 import pathlib
 from typing import Any
 
+import flax.nnx as nnx
 import jax.numpy as jnp
+import jax
+import dataclasses as _dc
 
 import openpi.models.model as _model
 import openpi.policies.policy as _policy
 import openpi.shared.download as download
 from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
+from openpi.training import weight_loaders as _weight_loaders
 import openpi.transforms as transforms
 
 
@@ -22,6 +26,7 @@ def create_trained_policy(
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
     pytorch_device: str | None = None,
+    modelbase: str = "ckpt",
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -54,7 +59,47 @@ def create_trained_policy(
         model = train_config.model.load_pytorch(train_config, weight_path)
         model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
     else:
-        model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
+        if modelbase == "ckpt":
+            model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
+        else:
+            # Serving-time ablation:
+            # - start from official base weights (pi0_base / pi05_base)
+            # - only override LoRA + tactile tokenizer weights from the provided checkpoint dir
+            # This keeps the backbone close to the base model while reusing your learned adapters.
+
+            base_choice = str(modelbase).lower()
+            if base_choice not in ("pi0", "pi05"):
+                raise ValueError(f"Unsupported modelbase={modelbase!r}. Use one of: 'ckpt', 'pi0', 'pi05'.")
+
+            # If using pi05 base, switch the model architecture to Pi05.
+            # We keep the rest of the config (LoRA variants, tactile streams, dims) unchanged for a fair adapter test.
+            derived_config = train_config
+            if base_choice == "pi05" and getattr(train_config.model, "pi05", False) is False:
+                derived_model = _dc.replace(train_config.model, pi05=True, discrete_state_input=True)
+                derived_config = _dc.replace(train_config, model=derived_model)
+
+            # Build a reference param tree by initializing the derived model once.
+            init_model = derived_config.model.create(jax.random.key(0))
+            ref_params = nnx.state(init_model).to_pure_dict()
+
+            base_params_path = (
+                "gs://openpi-assets/checkpoints/pi05_base/params"
+                if base_choice == "pi05"
+                else "gs://openpi-assets/checkpoints/pi0_base/params"
+            )
+            loaded_base = _model.restore_params(download.maybe_download(base_params_path), dtype=jnp.bfloat16)
+            base_params = _weight_loaders.merge_loaded_params(loaded_base, ref_params, missing_regex=".*")
+
+            # Overlay: only allow LoRA + tactile weights from the finetuned checkpoint.
+            overlay = _model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16)
+            merged = _weight_loaders.override_params_by_regex(
+                base_params,
+                overlay,
+                allow_regex=r".*(lora|tactile).*",
+            )
+
+            model = derived_config.model.load(merged)
+            train_config = derived_config
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure

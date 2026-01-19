@@ -2,6 +2,7 @@ import dataclasses
 import enum
 import logging
 import socket
+from typing import Literal
 
 import tyro
 
@@ -28,6 +29,14 @@ class Checkpoint:
     config: str
     # Checkpoint directory (e.g., "checkpoints/pi0_aloha_sim/exp/10000").
     dir: str
+    # Which base weights to use.
+    #
+    # - "ckpt": load the model weights directly from `dir` (default behavior).
+    # - "pi0":  load official pi0_base weights, then override LoRA/tactile weights from `dir`.
+    # - "pi05": load official pi05_base weights (Pi05 architecture), then override LoRA/tactile weights from `dir`.
+    #
+    # This is meant for quick inference-time ablations; training is unaffected.
+    modelbase: Literal["ckpt", "pi0", "pi05"] = "ckpt"
 
 
 @dataclasses.dataclass
@@ -90,7 +99,10 @@ def create_policy(args: Args) -> _policy.Policy:
     match args.policy:
         case Checkpoint():
             return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+                _config.get_config(args.policy.config),
+                args.policy.dir,
+                default_prompt=args.default_prompt,
+                modelbase=args.policy.modelbase,
             )
         case Default():
             return create_default_policy(args.env, default_prompt=args.default_prompt)

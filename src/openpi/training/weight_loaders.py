@@ -105,3 +105,39 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
             result[k] = flat_ref[k]
 
     return flax.traverse_util.unflatten_dict(result, sep="/")
+
+
+def merge_loaded_params(loaded_params: at.Params, ref_params: at.Params, *, missing_regex: str = ".*") -> at.Params:
+    """Public wrapper for merging checkpoint params into a reference param tree.
+
+    This is useful outside of training (e.g., serving-time weight composition).
+
+    - All keys that exist in both `loaded_params` and `ref_params` are taken from `loaded_params`.
+    - Any keys missing from `loaded_params` that match `missing_regex` are filled from `ref_params`.
+    """
+    return _merge_params(loaded_params, ref_params, missing_regex=missing_regex)
+
+
+def override_params_by_regex(
+    base_params: at.Params, overlay_params: at.Params, *, allow_regex: str
+) -> at.Params:
+    """Override a subset of params (selected by regex) from overlay into base.
+
+    Only keys that:
+    - match `allow_regex`, AND
+    - exist in both base and overlay
+    will be overridden.
+    """
+    pattern = re.compile(allow_regex)
+    flat_base = flax.traverse_util.flatten_dict(base_params, sep="/")
+    flat_overlay = flax.traverse_util.flatten_dict(overlay_params, sep="/")
+
+    for k, base_v in list(flat_base.items()):
+        if not pattern.fullmatch(k):
+            continue
+        if k not in flat_overlay:
+            continue
+        ov = flat_overlay[k]
+        flat_base[k] = ov.astype(base_v.dtype) if getattr(ov, "dtype", None) is not None and ov.dtype != base_v.dtype else ov
+
+    return flax.traverse_util.unflatten_dict(flat_base, sep="/")

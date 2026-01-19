@@ -257,6 +257,56 @@ class TaberoTacForceInputs(transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class TaberoTacForceEncInputs(transforms.DataTransformFn):
+    """
+    Tabero 输入（2 路图像 + 8×6 触觉指力历史 + 13 维动作），但将指力历史写入 encoder-prefix 通道。
+
+    该类用于 prefix-only 的 tacforce 配置（例如 pi05_tacforce_tabero / pi0_lora_tacforce_tabero_enc）：
+    - 图像：同 `TaberoTacForceInputs`（严格 Tabero v2.1 扁平格式：image / wrist_image / state）。
+    - 指力历史：读取 `tactile_gripper_force`（形状约 [8, 6]），写入 `tactile_prefix`（[*b, n, e]）。
+      具体由模型侧的 prefix tactile encoder（通常为 MLP）进行 flatten/编码为单个 token。
+    """
+
+    model_type: _model.ModelType
+
+    def __call__(self, data: dict) -> dict:
+        # 只支持 Tabero v2.1 扁平格式，不再做 observation/... 兼容。
+        base_image = _parse_image(data["image"])
+        wrist_image = _parse_image(data["wrist_image"])
+        state = data["state"]
+
+        right_image = np.zeros_like(base_image)
+        right_mask = np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_
+
+        inputs = {
+            "state": state,
+            "image": {
+                "base_0_rgb": base_image,
+                "left_wrist_0_rgb": wrist_image,
+                "right_wrist_0_rgb": right_image,
+            },
+            "image_mask": {
+                "base_0_rgb": np.True_,
+                "left_wrist_0_rgb": np.True_,
+                "right_wrist_0_rgb": right_mask,
+            },
+        }
+
+        # 8×6 指力历史作为 encoder-prefix tactile。
+        # Tabero/Tabero-force 数据转换脚本保证存在 `tactile_gripper_force` 字段，这里不做任何兼容分支。
+        if "tactile_gripper_force" not in data:
+            raise KeyError("TaberoTacForceEncInputs expects 'tactile_gripper_force' in data.")
+        inputs["tactile_prefix"] = data["tactile_gripper_force"]
+
+        if "actions" in data:
+            inputs["actions"] = data["actions"]
+        if "prompt" in data:
+            inputs["prompt"] = data["prompt"]
+
+        return inputs
+
+
+@dataclasses.dataclass(frozen=True)
 class TaberoTacAllInputs(transforms.DataTransformFn):
     """
     Tabero 输入（3 路图像 + tacfield+tacforce 双触觉 + 13 维动作）。
