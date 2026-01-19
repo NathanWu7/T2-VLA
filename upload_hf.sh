@@ -2,15 +2,15 @@
 set -euo pipefail
 
 ###############################################################################
-# 把 pi0_libero_force_low_mem_finetune 的 checkpoint 和 norm_stats
+# 把指定训练实验的 checkpoint（仅保留指定 step）和 norm_stats
 # 一次性打包并上传到同一个 Hugging Face 仓库。
 #
 # 使用前准备：
-#   1）已经跑完训练：checkpoints/pi0_libero_force_low_mem_finetune/force_test2/...
+#   1）已经跑完训练：checkpoints/<CONFIG_NAME>/<EXP_NAME>/...
 #   2）已经跑完 norm_stats 统计：
-#        uv run scripts/compute_norm_stats.py pi0_libero_force_low_mem_finetune
+#        uv run scripts/compute_norm_stats.py --config-name <CONFIG_NAME>
 #      会生成：
-#        assets/pi0_libero_force_low_mem_finetune/NathanWu7/tabero_force/...
+#        assets/<CONFIG_NAME>/<DATA_REPO_ID>/...
 #   3）已经登录 HF：
 #        huggingface-cli login
 #
@@ -23,22 +23,30 @@ set -euo pipefail
 ########################
 
 # HF 仓库 id（模型 + norm_stats 都放这里）
-HF_REPO_ID="NathanWu7/pi05_tacimg_tabero"
+HF_REPO_ID="NathanWu7/pi0_lora_tacfield_tabero_25"
 HF_REPO_TYPE="model"   # 你也可以改成 "dataset"
 
-# 训练 config 名 + 实验名（和 train_force_test.sh 保持一致）
-CONFIG_NAME="pi05_tacimg_tabero"
-EXP_NAME="pi05_tacimg_tabero"
+# 训练 config 名 + 实验名
+CONFIG_NAME="pi0_lora_tacfield_tabero"
+EXP_NAME="pi0_lora_tacfield_tabero_25"
 
-# 想要导出的 checkpoint step（子目录名），例如 "29999"。
-# 为空则导出整个实验目录（不推荐，一般只导出一个或少数几个 step）。
-CKPT_STEP="20000"
+# 想要上传/同步到 HF 的 checkpoint step（子目录名）。
+# 例：UPLOAD_STEPS=("49999")
+# 为空则导出整个实验目录（不推荐）。
+UPLOAD_STEPS=("49999")
 
 # 训练 / 统计时用到的 repo_id（HF 数据集）
-DATA_REPO_ID="NathanWu7/tabero"
+DATA_REPO_ID="NathanWu7/tabero_object_25"
 
 # 本地导出目录（脚本会自动创建/覆盖）
-EXPORT_DIR="export/pi05_tacimg_tabero"
+EXPORT_DIR="export/pi0_lora_tacfield_tabero_25"
+
+# 上传成功后，是否清理本地 CKPT_SRC 下除 LOCAL_KEEP_STEPS 以外的 step（不可逆！）
+PRUNE_LOCAL_AFTER_UPLOAD="true"
+
+# 本地想保留的 step（可以包含你不想上传的 step，比如 30000）
+# 为空则不进行本地按 step 清理（即使 PRUNE_LOCAL_AFTER_UPLOAD=true）
+LOCAL_KEEP_STEPS=("30000" "49999")
 
 ########################
 # 脚本开始
@@ -74,15 +82,16 @@ if [[ ! -d "${NORM_SRC}" ]]; then
   exit 1
 fi
 
-if [[ -n "${CKPT_STEP}" ]]; then
-  CKPT_SRC_STEP="${CKPT_SRC}/${CKPT_STEP}"
-  if [[ ! -d "${CKPT_SRC_STEP}" ]]; then
-    echo "[ERROR] 找不到指定 step 的 checkpoint 目录: ${CKPT_SRC_STEP}" >&2
-    echo "        请检查 CKPT_STEP（当前为 \"${CKPT_STEP}\"）是否正确，或用 ls ${CKPT_SRC} 查看有哪些 step。" >&2
-    exit 1
-  fi
-  echo "[INFO] 将导出单个 checkpoint："
-  echo "       Checkpoint: ${CKPT_SRC_STEP}"
+if (( ${#UPLOAD_STEPS[@]} > 0 )); then
+  echo "[INFO] 将仅导出并上传以下 checkpoints step："
+  for s in "${UPLOAD_STEPS[@]}"; do
+    if [[ ! -d "${CKPT_SRC}/${s}" ]]; then
+      echo "[ERROR] 找不到指定 step 的 checkpoint 目录: ${CKPT_SRC}/${s}" >&2
+      echo "        请检查 UPLOAD_STEPS 配置，或用 ls ${CKPT_SRC} 查看有哪些 step。" >&2
+      exit 1
+    fi
+    echo "       - ${s}"
+  done
 else
   echo "[INFO] 将导出整个实验目录下的所有 checkpoint："
   echo "       Checkpoints: ${CKPT_SRC}"
@@ -132,12 +141,15 @@ mkdir -p "${CKPT_DST}" "${NORM_DST}"
 echo "[INFO] 拷贝 checkpoint -> ${CKPT_DST}"
 
 EXP_DST="${CKPT_DST}/${EXP_NAME}"
+echo "[INFO] 为确保 HF 仓库中只保留期望的 step，将重建目录: ${EXP_DST}"
+rm -rf "${EXP_DST}"
 mkdir -p "${EXP_DST}"
 
-if [[ -n "${CKPT_STEP}" ]]; then
-  # 仅复制指定 step（追加到已有目录，不会删除已有 step）
-  echo "[INFO] 仅复制 step=${CKPT_STEP}"
-  cp -r "${CKPT_SRC}/${CKPT_STEP}" "${EXP_DST}/"
+if (( ${#UPLOAD_STEPS[@]} > 0 )); then
+  for s in "${UPLOAD_STEPS[@]}"; do
+    echo "[INFO] 复制 step=${s}"
+    cp -r "${CKPT_SRC}/${s}" "${EXP_DST}/"
+  done
   # 如果存在 wandb_id.txt，也一并复制，方便恢复 run
   if [[ -f "${CKPT_SRC}/wandb_id.txt" ]]; then
     cp "${CKPT_SRC}/wandb_id.txt" "${EXP_DST}/"
@@ -153,7 +165,7 @@ cp -r "${NORM_SRC}" "${NORM_DST}/"
 # 生成一个简单的 README，方便在 HF 页面查看信息
 README_PATH="README.md"
 cat > "${README_PATH}" <<EOF
-# pi0_libero_force_low_mem_finetune on NathanWu7/tabero_force
+# ${CONFIG_NAME} / ${EXP_NAME}
 
 本仓库包含：
 
@@ -163,7 +175,7 @@ cat > "${README_PATH}" <<EOF
   - 路径：\`norm_stats/${CONFIG_NAME}/${DATA_REPO_ID}/...\`
 
 训练配置基于 \`${CONFIG_NAME}\`，数据集为 Hugging Face 上的
-\`NathanWu7/tabero_force\`（LeRobot 格式）[链接](https://huggingface.co/datasets/NathanWu7/tabero_force)。
+\`${DATA_REPO_ID}\`（LeRobot 格式）。
 
 推理时的典型用法示例（伪代码）：
 
@@ -188,5 +200,31 @@ fi
 git push -u origin main
 
 echo "[SUCCESS] 已将 checkpoint 和 norm_stats 上传到: https://huggingface.co/${HF_REPO_ID}"
+
+########################################
+# （可选）清理本地多余 checkpoints step
+########################################
+if [[ "${PRUNE_LOCAL_AFTER_UPLOAD}" == "true" ]] && (( ${#LOCAL_KEEP_STEPS[@]} > 0 )); then
+  echo "[INFO] 开始清理本地多余 step（保留：${LOCAL_KEEP_STEPS[*]}）: ${CKPT_SRC}"
+  shopt -s nullglob
+  for d in "${CKPT_SRC}/"*; do
+    bn="$(basename "${d}")"
+    # 跳过非目录和 wandb 文件
+    [[ -d "${d}" ]] || continue
+    keep="false"
+    for s in "${LOCAL_KEEP_STEPS[@]}"; do
+      if [[ "${bn}" == "${s}" ]]; then
+        keep="true"
+        break
+      fi
+    done
+    if [[ "${keep}" == "false" ]]; then
+      echo "[INFO] 删除本地 step: ${d}"
+      rm -rf "${d}"
+    fi
+  done
+  shopt -u nullglob
+  echo "[SUCCESS] 本地清理完成：${CKPT_SRC}"
+fi
 
 
