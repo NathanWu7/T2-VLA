@@ -1182,8 +1182,6 @@ _CONFIGS = [
             pi05=True,
             action_horizon=10,
             discrete_state_input=False,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
             # 使用与 force 版相同的 EXPERT_HIS_C_FUT loss 拆分逻辑，但关闭力的监督：
             # - effective_action_dim=13：前 7 维是真实关节动作，后 6 维作为“力槽位”；
             # - tactile_type=EXPERT_HIS_C_FUT：在 compute_loss 中按 [7 动作 + 6 力] 拆分；
@@ -1208,16 +1206,8 @@ _CONFIGS = [
             ),
             extra_delta_transform=True,
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader(
-            "gs://openpi-assets/checkpoints/pi05_base/params",
-            missing_regex=".*",
-        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=50_000,
-        freeze_filter=pi0_config.Pi0Config(
-            pi05=True,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
-        ).get_freeze_filter(),
         ema_decay=None,
     ),
     TrainConfig(
@@ -1312,8 +1302,6 @@ _CONFIGS = [
             pi05=True,
             action_horizon=10,
             discrete_state_input=False,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
             effective_action_dim=13,
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
@@ -1338,16 +1326,8 @@ _CONFIGS = [
             decay_lr=5e-5,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        weight_loader=weight_loaders.CheckpointWeightLoader(
-            "gs://openpi-assets/checkpoints/pi05_base/params",
-            missing_regex=".*",
-        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=20_000,
-        freeze_filter=pi0_config.Pi0Config(
-            pi05=True,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
-        ).get_freeze_filter(),
         ema_decay=0.999,
     ),
     TrainConfig(
@@ -1358,8 +1338,6 @@ _CONFIGS = [
             pi05=True,
             action_horizon=10,
             discrete_state_input=False,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
             effective_action_dim=13,
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
@@ -1392,14 +1370,10 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi05_base/params",
-            missing_regex=".*",
+            # 该配置会创建 prefix tactile encoder（checkpoint 中通常不存在），仅允许 tactile 相关参数缺失。
+            missing_regex=".*tactile.*",
         ),
         num_train_steps=20_000,
-        freeze_filter=pi0_config.Pi0Config(
-            pi05=True,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
-        ).get_freeze_filter(),
         ema_decay=0.999,
     ),
     TrainConfig(
@@ -1410,8 +1384,6 @@ _CONFIGS = [
             pi05=True,
             action_horizon=10,
             discrete_state_input=False,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
             effective_action_dim=13,
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
@@ -1448,14 +1420,10 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi05_base/params",
-            missing_regex=".*",
+            # 该配置会创建 prefix tactile encoder（checkpoint 中通常不存在），仅允许 tactile 相关参数缺失。
+            missing_regex=".*tactile.*",
         ),
         num_train_steps=20_000,
-        freeze_filter=pi0_config.Pi0Config(
-            pi05=True,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
-        ).get_freeze_filter(),
         ema_decay=0.999,
     ),
     TrainConfig(
@@ -1466,8 +1434,6 @@ _CONFIGS = [
             pi05=True,
             action_horizon=10,
             discrete_state_input=False,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
             effective_action_dim=13,
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
@@ -1504,14 +1470,10 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi05_base/params",
-            missing_regex=".*",
+            # 该配置会创建 prefix/suffix tactile encoder（checkpoint 中通常不存在），仅允许 tactile 相关参数缺失。
+            missing_regex=".*tactile.*",
         ),
         num_train_steps=20_000,
-        freeze_filter=pi0_config.Pi0Config(
-            pi05=True,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
-        ).get_freeze_filter(),
         ema_decay=0.999,
     ),
     TrainConfig(
