@@ -92,6 +92,14 @@ class Pi0Config(_model.BaseModelConfig):
     # - ("tactile_suffix", "tactile_prefix")：同时启用前缀+后缀双通道。
     tactile_streams: tuple[str, ...] = ()
 
+    # tacforce（Observation.tactile_suffix）token 的“放置位置”：
+    # - "suffix"（默认，向后兼容）：tactile_suffix token 作为 decoder-suffix token（只进 expert suffix）。
+    # - "prefix"：tactile_suffix token 放到 encoder-prefix token 序列中（与 tactile_prefix 同属 prefix 条件）。
+    #
+    # 典型用途：Tabero tacall 需要同时把 tacfield（tactile_prefix）和 tacforce（tactile_suffix）都作为 prefix 条件，
+    #          但仍希望复用 tacforce 的 MLP 编码器（action_expert 宽度）。
+    tactile_suffix_placement: str = "suffix"
+
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)

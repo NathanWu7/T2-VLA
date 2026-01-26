@@ -1139,6 +1139,9 @@ _CONFIGS = [
             # - suffix 通道（tactile_suffix）：沿用原版 tacforce（8×6 指力，经 MLP 编码，仅进 decoder）；
             # - prefix 通道（tactile_prefix）：沿用 tacfield（9 帧 marker，经 TCN 编码，仅进 encoder）。
             tactile_streams=("tactile_suffix", "tactile_prefix"),
+            # 将 tacforce（tactile_suffix）编码后的 token 放到 prefix 序列里（与 tacfield 同为 prefix 条件）。
+            # 其他保持不变；tacfield 仍然走 tactile_prefix（prefix）。
+            tactile_suffix_placement="prefix",
             # decoder-suffix：tacforce（8×6 gripper force），flatten 成 8*6，经 MLP 编码。
             tactile_dim_in=8 * 6,
             tactile_history=TABERO_TACTILE_HISTORY,
@@ -1158,7 +1161,7 @@ _CONFIGS = [
             decay_lr=2.5e-6,
         ),
         data=TaberoTacAllDataConfig(
-            repo_id="NathanWu7/tabero_object_25",
+            repo_id="NathanWu7/tabero",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -1192,6 +1195,33 @@ _CONFIGS = [
         ),
         data=TaberoNoTactNoForceDataConfig(
             repo_id="NathanWu7/tabero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi0_base/params",
+        ),
+        num_train_steps=50_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi0_lora_notac_bin_tabero",
+        # 与 `pi0_lora_notac_tabero` 完全一致，仅更换数据集为 tabero_binary。
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
+        ),
+        data=TaberoNoTactNoForceDataConfig(
+            repo_id="NathanWu7/tabero_binary",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -1270,11 +1300,11 @@ _CONFIGS = [
             extra_delta_transform=True,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=2.5e-5,
-            decay_lr=2.5e-6,
+            peak_lr=1.0e-5,
+            decay_lr=1.0e-6,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=20_000,
+        num_train_steps=50_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1305,8 +1335,8 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=2.5e-5,
-            decay_lr=2.5e-6,
+            peak_lr=1.0e-5,
+            decay_lr=1.0e-6,
         ),
         data=TaberoTacFieldDataConfig(
             repo_id="NathanWu7/tabero",
@@ -1320,7 +1350,7 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=20_000,
+        num_train_steps=50_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1367,7 +1397,7 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=20_000,
+        num_train_steps=50_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
@@ -1522,7 +1552,7 @@ _CONFIGS = [
             decay_lr=2.5e-6,
         ),
         data=TaberoTacForceEncDataConfig(
-            repo_id="NathanWu7/tabero_object_25",
+            repo_id="NathanWu7/tabero",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),

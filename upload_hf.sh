@@ -13,6 +13,9 @@ set -euo pipefail
 #        assets/<CONFIG_NAME>/<DATA_REPO_ID>/...
 #   3）已经登录 HF：
 #        huggingface-cli login
+#      说明：huggingface-cli 登录不一定能让 git push 自动拿到凭据。
+#      最简方案：在运行脚本前导出 HF_TOKEN（Hugging Face 的访问 token），脚本会用它配置 git remote：
+#        export HF_TOKEN=xxxxxxxx
 #
 # 运行方式（在工程根目录）：
 #   bash upload_pi0_tabero_force_to_hf.sh
@@ -23,23 +26,23 @@ set -euo pipefail
 ########################
 
 # HF 仓库 id（模型 + norm_stats 都放这里）
-HF_REPO_ID="NathanWu7/pi0_lora_tacfield_tabero_25"
+HF_REPO_ID="NathanWu7/pi0_lora_notac_bin_tabero"
 HF_REPO_TYPE="model"   # 你也可以改成 "dataset"
 
 # 训练 config 名 + 实验名
-CONFIG_NAME="pi0_lora_tacfield_tabero"
-EXP_NAME="pi0_lora_tacfield_tabero_25"
+CONFIG_NAME="pi0_lora_notac_bin_tabero"
+EXP_NAME="pi0_lora_notac_bin_tabero"
 
 # 想要上传/同步到 HF 的 checkpoint step（子目录名）。
 # 例：UPLOAD_STEPS=("49999")
 # 为空则导出整个实验目录（不推荐）。
-UPLOAD_STEPS=("49999")
+UPLOAD_STEPS=("30000" "49999")
 
 # 训练 / 统计时用到的 repo_id（HF 数据集）
-DATA_REPO_ID="NathanWu7/tabero_object_25"
+DATA_REPO_ID="NathanWu7/tabero_binary"
 
 # 本地导出目录（脚本会自动创建/覆盖）
-EXPORT_DIR="export/pi0_lora_tacfield_tabero_25"
+EXPORT_DIR="export/pi0_lora_notac_bin_tabero"
 
 # 上传成功后，是否清理本地 CKPT_SRC 下除 LOCAL_KEEP_STEPS 以外的 step（不可逆！）
 PRUNE_LOCAL_AFTER_UPLOAD="true"
@@ -110,6 +113,11 @@ rm -rf "${EXPORT_DIR}"
 git clone "https://huggingface.co/${HF_REPO_ID}" "${EXPORT_DIR}"
 
 cd "${EXPORT_DIR}"
+
+# 如果提供了 HF_TOKEN，则将 remote url 设置为带 token 的 https，避免 git push 401/askpass 交互失败。
+if [[ -n "${HF_TOKEN:-}" ]]; then
+  git remote set-url origin "https://user:${HF_TOKEN}@huggingface.co/${HF_REPO_ID}"
+fi
 
 #----------------------------------------
 # 首次运行时自动为 checkpoints / norm_stats 启用 Git LFS

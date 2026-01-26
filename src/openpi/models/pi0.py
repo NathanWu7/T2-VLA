@@ -75,6 +75,8 @@ class Pi0(_model.BaseModel):
         self.tactile_encoder_type = config.tactile_encoder_type
         # 触觉通道选择（"tactile_suffix" / "tactile_prefix" / 两者）。
         self.tactile_streams = tuple(config.tactile_streams)
+        # tacforce（tactile_suffix）token 放置位置：默认 suffix（向后兼容），可选 prefix。
+        self.tactile_suffix_placement = getattr(config, "tactile_suffix_placement", "suffix")
         # 有效 action 维度：用于 loss 中的 [动作, 力矩] 切分。
         # 允许数据只在前 K 维有意义，其余为 padding。
         self.effective_action_dim = config.effective_action_dim
@@ -120,6 +122,8 @@ class Pi0(_model.BaseModel):
         #
         self.tactile_prefix_encoder = None
         self.tactile_suffix_encoder = None
+        # 当把 tactile_suffix token 放到 prefix 序列时，可能需要做宽度对齐（action_expert_width -> paligemma_width）。
+        self.tactile_suffix_to_prefix_proj = None
         if self.tactile_type is TactileType.EXPERT_HIS_C_FUT:
             use_prefix = "tactile_prefix" in self.tactile_streams
             use_suffix = "tactile_suffix" in self.tactile_streams
@@ -163,6 +167,13 @@ class Pi0(_model.BaseModel):
                     expert_width=suffix_width,
                     rngs=rngs,
                 )
+                # 若选择把 suffix token 放到 prefix 序列，则需把 embedding 宽度对齐到 paligemma 的 width。
+                if self.tactile_suffix_placement == "prefix":
+                    prefix_width = paligemma_config.width
+                    if suffix_width != prefix_width:
+                        self.tactile_suffix_to_prefix_proj = nnx.Linear(
+                            suffix_width, prefix_width, rngs=rngs
+                        )
 
         # Action / time path.
         if config.pi05:
@@ -223,12 +234,17 @@ class Pi0(_model.BaseModel):
                 tokens_list.append(tactile_token)
                 input_mask_list.append(jnp.ones(tactile_token.shape[:2], dtype=jnp.bool_))
                 ar_mask_list.append(ar_mask_value)
-            # decoder-suffix 通道：从 Observation.tactile_suffix（原 tacforce 通道）读取，经 suffix encoder 编码。
-            if mode == "suffix" and "tactile_suffix" in self.tactile_streams and obs.tactile_suffix is not None:
-                tactile_token = self._encode_tactile_suffix(obs.tactile_suffix)[:, None, :]
-                tokens_list.append(tactile_token)
-                input_mask_list.append(jnp.ones(tactile_token.shape[:2], dtype=jnp.bool_))
-                ar_mask_list.append(ar_mask_value)
+            # tactile_suffix（原 tacforce 通道）：可选择放到 prefix 或 suffix。
+            if "tactile_suffix" in self.tactile_streams and obs.tactile_suffix is not None:
+                place_in_prefix = self.tactile_suffix_placement == "prefix"
+                if (mode == "prefix" and place_in_prefix) or (mode == "suffix" and not place_in_prefix):
+                    tactile_emb = self._encode_tactile_suffix(obs.tactile_suffix)  # [b, emb]
+                    if mode == "prefix" and place_in_prefix and self.tactile_suffix_to_prefix_proj is not None:
+                        tactile_emb = self.tactile_suffix_to_prefix_proj(tactile_emb)
+                    tactile_token = tactile_emb[:, None, :]
+                    tokens_list.append(tactile_token)
+                    input_mask_list.append(jnp.ones(tactile_token.shape[:2], dtype=jnp.bool_))
+                    ar_mask_list.append(ar_mask_value)
 
         return tokens_list, input_mask_list, ar_mask_list
 
