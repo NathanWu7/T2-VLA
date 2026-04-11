@@ -95,6 +95,11 @@ class DataConfig:
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
 
+    # Optional Hugging Face git revision for `lerobot.datasets.LeRobotDataset` (branch, tag, or commit).
+    # Use when the dataset repo has no `v*` version tag (LeRobot defaults to a semver and calls
+    # `get_safe_version`, which requires such a tag). Example: the branch name main.
+    lerobot_revision: str | None = None
+
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
     # Action space for DROID dataset.
@@ -1080,6 +1085,40 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi0_base/params",
         ),
         num_train_steps=50_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi0_lora_tacimg_real",
+        # 真机数据：与 pi0_lora_tacimg_tabero 相同（三路图像 + 13 维动作，无 tactile token，loss 拆分），
+        # 数据集为 HF LeRobot 格式 xiangxin0923/test_fix_dataset（与 Tabero 流水线字段一致：image / wrist_image / tactile_image）。
+        # 请在 Hub 上为数据集仓库打与 info.json 中 codebase_version 一致的 git tag（例如 v2.1），以便 lerobot 首次拉取。
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
+        ),
+        data=TaberoTacImgDataConfig(
+            repo_id="xiangxin0923/test_fix_dataset",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            peak_lr=2.5e-5,
+            decay_lr=2.5e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi0_base/params",
+        ),
+        num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
