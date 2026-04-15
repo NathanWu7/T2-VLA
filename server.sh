@@ -30,14 +30,11 @@ usage() {
 
   cat <<EOF
 用法：
-  bash server.sh <config_name> [ckpt_step] [modelbase]
+  bash server.sh <config_name> [ckpt_step]
 
 示例：
   bash server.sh pi0_lora_tacimg_tabero 49999
   PORT=9000 bash server.sh pi0_lora_tacforce_tabero
-  # 仅做推理测试：用官方 base 权重 + 只覆盖你训练得到的 LoRA/tactile
-  bash server.sh pi0_lora_tacimg_tabero 49999 pi05   # pi05_base + overlay(lora/tactile)
-  bash server.sh pi0_lora_tacimg_tabero 49999 pi0    # pi0_base  + overlay(lora/tactile)
 
 常用 config（可在 src/openpi/training/config.py 里查看更多）：
   - pi0_lora_tacimg_tabero
@@ -63,7 +60,6 @@ fi
 
 CONFIG_NAME="${1}"
 CKPT_STEP="${2:-49999}"
-MODELBASE="${3:-ckpt}"
 EXP_NAME="${EXP_NAME:-${CONFIG_NAME}}"
 PORT="${PORT:-8000}"
 
@@ -80,7 +76,6 @@ echo "[INFO] 当前工程根目录: ${ROOT_DIR}"
 echo "[INFO] config: ${CONFIG_NAME}"
 echo "[INFO] exp   : ${EXP_NAME}"
 echo "[INFO] step  : ${CKPT_STEP}"
-echo "[INFO] modelbase: ${MODELBASE}"
 echo "[INFO] port  : ${PORT}"
 echo "[INFO] HF repo: ${HF_REPO_URL}"
 echo "[INFO] local : ${HF_REPO_DIR}"
@@ -158,7 +153,6 @@ uv run scripts/serve_policy.py \
   --port "${PORT}" \
   policy:checkpoint \
   --policy.config="${CONFIG_NAME}" \
-  --policy.dir="${CKPT_DIR}" \
-  --policy.modelbase="${MODELBASE}"
+  --policy.dir="${CKPT_DIR}"
 
 

@@ -1068,7 +1068,7 @@ _CONFIGS = [
         ),
         data=TaberoTacImgDataConfig(
             # 你的原始 Tabero 数据集（含 tactile_image / tactile_gripper_force 等字段）。
-            repo_id="NathanWu7/tabero_object_25",
+            repo_id="NathanWu7/tabero",
             base_config=DataConfig(
                 # 如果在 LeRobot meta 里有 tasks 信息，可以启用从 task 里自动生成 prompt。
                 prompt_from_task=True,
