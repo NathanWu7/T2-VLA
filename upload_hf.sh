@@ -70,6 +70,12 @@ if ! command -v git >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! uv run huggingface-cli whoami >/dev/null 2>&1; then
+  echo "[ERROR] 当前未登录 Hugging Face 或登录已失效。" >&2
+  echo "        请先执行：uv run huggingface-cli login" >&2
+  exit 1
+fi
+
 CKPT_SRC="${ROOT_DIR}/checkpoints/${CONFIG_NAME}/${EXP_NAME}"
 NORM_SRC="${ROOT_DIR}/assets/${CONFIG_NAME}/${DATA_REPO_ID}"
 
@@ -106,7 +112,22 @@ echo "       Norm stats : ${NORM_SRC}"
 ########################################
 
 echo "[INFO] 确保 Hugging Face 仓库存在: ${HF_REPO_ID}"
-uv run huggingface-cli repo create "${HF_REPO_ID}" --type "${HF_REPO_TYPE}" --yes || true
+if ! uv run python - "${HF_REPO_ID}" "${HF_REPO_TYPE}" <<'PY'
+import sys
+from huggingface_hub import HfApi
+
+repo_id = sys.argv[1]
+repo_type = sys.argv[2]
+
+# exist_ok=True: 已存在则不报错；不存在则创建；无权限/未登录则抛错
+HfApi().create_repo(repo_id=repo_id, repo_type=repo_type, private=False, exist_ok=True)
+print(f"[INFO] 仓库可用: {repo_id} (type={repo_type})")
+PY
+then
+  echo "[ERROR] 无法创建或访问 Hugging Face 仓库: ${HF_REPO_ID}" >&2
+  echo "        请检查账号权限和登录状态（uv run huggingface-cli whoami）。" >&2
+  exit 1
+fi
 
 echo "[INFO] 清理并从 Hugging Face 仓库 clone 到本地导出目录: ${EXPORT_DIR}"
 rm -rf "${EXPORT_DIR}"

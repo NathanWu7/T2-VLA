@@ -1321,7 +1321,7 @@ _CONFIGS = [
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
             action_horizon=10,
-            discrete_state_input=False,
+            discrete_state_input=True,
             # 数据中真实有效动作维度为 13，其余通过 PadStatesAndActions padding。
             effective_action_dim=13,
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
@@ -1338,16 +1338,20 @@ _CONFIGS = [
             ),
             extra_delta_transform=True,
         ),
+        batch_size=256,
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.0e-5,
-            decay_lr=1.0e-6,
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
         ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=50_000,
+        num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
-        ema_decay=None,
+        ema_decay=0.999,
     ),
     TrainConfig(
         name="pi05_lora_tacimg_real",
@@ -1358,7 +1362,7 @@ _CONFIGS = [
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
             action_horizon=10,
-            discrete_state_input=False,
+            discrete_state_input=True,
             effective_action_dim=13,
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
@@ -1373,16 +1377,20 @@ _CONFIGS = [
             ),
             extra_delta_transform=True,
         ),
+        batch_size=32,
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.0e-5,
-            decay_lr=1.0e-6,
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
         ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
-        ema_decay=None,
+        ema_decay=0.999,
     ),
     TrainConfig(
         name="pi05_lora_tacfield_tabero",
@@ -1408,10 +1416,14 @@ _CONFIGS = [
             tactile_streams=("tactile_prefix",),
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
+        batch_size=256,
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=1.0e-5,
-            decay_lr=1.0e-6,
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
         ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         data=TaberoTacFieldDataConfig(
             repo_id="NathanWu7/tabero",
             base_config=DataConfig(
@@ -1424,11 +1436,11 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=50_000,
+        num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
-        ema_decay=None,
+        ema_decay=0.999,
     ),
     TrainConfig(
         name="pi05_lora_tacforce_tabero",
@@ -1455,10 +1467,14 @@ _CONFIGS = [
             tactile_streams=("tactile_prefix",),
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
+        batch_size=256,
         lr_schedule=_optimizer.CosineDecaySchedule(
-            peak_lr=2.5e-5,
-            decay_lr=2.5e-6,
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
         ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         data=TaberoTacForceEncDataConfig(
             repo_id="NathanWu7/tabero",
             base_config=DataConfig(
@@ -1471,11 +1487,11 @@ _CONFIGS = [
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*",
         ),
-        num_train_steps=50_000,
+        num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
-        ema_decay=None,
+        ema_decay=0.999,
     ),
     TrainConfig(
         name="pi0_lora_tacfield_tabero",
