@@ -1321,7 +1321,7 @@ _CONFIGS = [
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
             action_horizon=10,
-            discrete_state_input=True,
+            discrete_state_input=False,
             # 数据中真实有效动作维度为 13，其余通过 PadStatesAndActions padding。
             effective_action_dim=13,
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
@@ -1349,9 +1349,12 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+            pi05=True,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            action_horizon=10,
         ).get_freeze_filter(),
-        ema_decay=0.999,
+        ema_decay=None,
     ),
     TrainConfig(
         name="pi05_lora_tacimg_real",
@@ -1441,9 +1444,12 @@ _CONFIGS = [
         ),
         num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+            pi05=True,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            action_horizon=10,
         ).get_freeze_filter(),
-        ema_decay=0.999,
+        ema_decay=None,
     ),
     TrainConfig(
         name="pi05_lora_tacforce_tabero",
@@ -1492,9 +1498,12 @@ _CONFIGS = [
         ),
         num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+            pi05=True,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            action_horizon=10,
         ).get_freeze_filter(),
-        ema_decay=0.999,
+        ema_decay=None,
     ),
     TrainConfig(
         name="pi0_lora_tacfield_tabero",
