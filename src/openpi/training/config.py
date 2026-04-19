@@ -1365,7 +1365,7 @@ _CONFIGS = [
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
             action_horizon=10,
-            discrete_state_input=False,
+            discrete_state_input=True,
             effective_action_dim=13,
             tactile_type=TactileType.EXPERT_HIS_C_FUT,
             tactile_dim=6,
@@ -1392,7 +1392,7 @@ _CONFIGS = [
         num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
-            discrete_state_input=False,
+            discrete_state_input=True,
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
             action_horizon=10,
         ).get_freeze_filter(),

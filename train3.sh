@@ -2,7 +2,7 @@
 
 # ========= Slurm 资源申请（你需要按你们集群规则修改这块）=========
 # 常见要改的：account / partition / GPU 数 / 时间 / CPU 数 / 内存
-#SBATCH --job-name=t2vla_train
+#SBATCH --job-name=t2vla_pi0_wo_tabero
 #SBATCH --partition=defq
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -25,15 +25,32 @@ PROJECT_DIR="/home/qiweiw/workspace/T2-VLA"
 cd "${PROJECT_DIR}"
 mkdir -p "${PROJECT_DIR}/slurm"
 
-CONFIG_NAME="pi05_tacforce_tabero"
-EXP_NAME="pi05_tacforce_tabero_25"
+###############################################################################
+# 训练目标：顺序训练 3 个 Tabero(wo) 配置
+# - pi0_lora_tacimgwo_tabero
+# - pi0_lora_tacfieldwo_tabero
+# - pi0_lora_tacforcewo_tabero
+#
+# 可选环境变量：
+# - RUN_TAG：exp-name 的后缀（默认 25），例如 RUN_TAG=run1
+# - OVERWRITE：是否传 --overwrite（默认 1），设为 0 关闭
+# - WANDB_MODE：例如 export WANDB_MODE=offline
+###############################################################################
+
+RUN_TAG="${RUN_TAG:-}"
+OVERWRITE="${OVERWRITE:-1}"
+
+CONFIGS=(
+  "pi05_lora_tacimg_real"
+)
 
 echo "Running on host: $(hostname)"
 echo "Working dir:     $(pwd)"
 echo "Slurm job id:    ${SLURM_JOB_ID:-N/A}"
 echo "Slurm nodelist:  ${SLURM_JOB_NODELIST:-N/A}"
-echo "Config:          ${CONFIG_NAME}"
-echo "Exp name:        ${EXP_NAME}"
+echo "Run tag:         ${RUN_TAG}"
+echo "Overwrite:       ${OVERWRITE}"
+echo "Configs:         ${CONFIGS[*]}"
 
 # 建议保留：Hydra 报错更全
 export HYDRA_FULL_ERROR=1
@@ -54,13 +71,26 @@ if [[ ! -d "${PROJECT_DIR}/.venv" ]]; then
   uv sync --frozen --no-dev
 fi
 
-# ========= 这里开始是真正训练命令（按 train2.sh 的写法）=========
-echo "===== compute_norm_stats: ${CONFIG_NAME} ====="
-srun --ntasks=1 bash -lc "cd '${PROJECT_DIR}' && uv run scripts/compute_norm_stats.py --config-name '${CONFIG_NAME}'"
+run_one () {
+  local config_name="$1"
+  local exp_name="${config_name}_${RUN_TAG}"
+  local overwrite_flag=""
+  if [[ "${OVERWRITE}" == "1" ]]; then
+    overwrite_flag="--overwrite"
+  fi
 
-echo "===== train: ${CONFIG_NAME} ====="
-srun --ntasks=1 bash -lc "cd '${PROJECT_DIR}' && uv run scripts/train.py '${CONFIG_NAME}' --exp-name='${EXP_NAME}' --overwrite"
-# ===============================================================
+  echo "===== compute_norm_stats: ${config_name} ====="
+  srun --ntasks=1 bash -lc "cd '${PROJECT_DIR}' && uv run scripts/compute_norm_stats.py --config-name '${config_name}'"
+
+  echo "===== train: ${config_name} (exp-name=${exp_name}) ====="
+  srun --ntasks=1 bash -lc "cd '${PROJECT_DIR}' && uv run scripts/train.py '${config_name}' --exp-name='${exp_name}' ${overwrite_flag}"
+}
+
+echo "===== start training ====="
+for cfg in "${CONFIGS[@]}"; do
+  run_one "${cfg}"
+done
+echo "===== all done ====="
 
 
 set +x
