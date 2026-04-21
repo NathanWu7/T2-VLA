@@ -36,10 +36,10 @@ EXP_NAME="pi05_lora_tacimg_real"
 # 想要上传/同步到 HF 的 checkpoint step（子目录名）。
 # 例：UPLOAD_STEPS=("49999")
 # 为空则导出整个实验目录（不推荐）。
-UPLOAD_STEPS=("29999")
+UPLOAD_STEPS=("20000" "29999")
 
 # 训练 / 统计时用到的 repo_id（HF 数据集）
-DATA_REPO_ID="xiangxin0923/test_fix_dataset"
+DATA_REPO_ID="xiangxin0923/yellow_cube"
 
 # 本地导出目录（脚本会自动创建/覆盖）
 EXPORT_DIR="export/pi05_lora_tacimg_real"
@@ -49,7 +49,7 @@ PRUNE_LOCAL_AFTER_UPLOAD="true"
 
 # 本地想保留的 step（可以包含你不想上传的 step，比如 30000）
 # 为空则不进行本地按 step 清理（即使 PRUNE_LOCAL_AFTER_UPLOAD=true）
-LOCAL_KEEP_STEPS=("29999")
+LOCAL_KEEP_STEPS=("20000" "29999")
 
 ########################
 # 脚本开始
