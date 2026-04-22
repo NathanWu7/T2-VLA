@@ -1328,7 +1328,7 @@ _CONFIGS = [
             # 不创建 tactile token 相关权重，只启用 loss 拆分逻辑。
             tactile_dim_in=0,
             tactile_streams=(),
-            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
+            tactile_loss_weight=0.01,
         ),
         data=TaberoTacImgDataConfig(
             repo_id="NathanWu7/tabero",
@@ -1337,7 +1337,7 @@ _CONFIGS = [
             ),
             extra_delta_transform=True,
         ),
-        batch_size=32,
+        batch_size=64,
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=10_000,
             peak_lr=2.5e-5,
@@ -1386,7 +1386,7 @@ _CONFIGS = [
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=30_000,
+        num_train_steps=50_000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=False,

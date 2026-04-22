@@ -14,16 +14,15 @@
 # - 每个任务跑 1 个 config，可并发执行。
 
 # ========= Slurm 资源申请（你需要按你们集群规则修改这块）=========
-#SBATCH --job-name=t2vla_pi0_wo_tabero
+#SBATCH --job-name=t2vla
 #SBATCH --partition=defq
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-# 强制跑到指定节点（如需覆盖，也可以在 sbatch 时传 --nodelist=...）
-#SBATCH --nodelist=h20-6
+# 强制跑到指定节点（如需覆盖，也可以在 sbatch 时传 --nodelist=...）SBATCH --nodelist=h20-2
 #
 # 这里的 GPU 数是“每个 array task”的资源申请。
 # 当前设置为每个任务 8 张卡。
-#SBATCH --gres=gpu:8
+#SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
 #SBATCH --time=24:00:00
 #
@@ -70,8 +69,6 @@ STARTUP_STAGGER_SEC="${STARTUP_STAGGER_SEC:-20}"
 
 CONFIGS=(
   "pi05_lora_tacimg_tabero"
-  "pi05_lora_tacfield_tabero"
-  "pi05_lora_tacforce_tabero"
 )
 
 TASK_ID="${SLURM_ARRAY_TASK_ID}"
