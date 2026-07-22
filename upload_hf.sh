@@ -26,30 +26,33 @@ set -euo pipefail
 ########################
 
 # HF 仓库 id（模型 + norm_stats 都放这里）
-HF_REPO_ID="NathanWu7/pi05_lora_tacimg_tabero"
+HF_REPO_ID="xiangxin0923/pi05_lora_tacimg_realworld_replayed_tabero"
 HF_REPO_TYPE="model"   # 你也可以改成 "dataset"
 
+# 本机直连 huggingface.co 常 TLS 失败；默认走镜像（可用环境变量覆盖）
+HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+export HF_ENDPOINT
+
 # 训练 config 名 + 实验名
-CONFIG_NAME="pi05_lora_tacimg_tabero"
-EXP_NAME="pi05_lora_tacimg_tabero"
+CONFIG_NAME="pi05_lora_tacimg_realworld_replayed_tabero"
+EXP_NAME="pi05_lora_tacimg_rr_tabero"
 
 # 想要上传/同步到 HF 的 checkpoint step（子目录名）。
 # 例：UPLOAD_STEPS=("49999")
 # 为空则导出整个实验目录（不推荐）。
-UPLOAD_STEPS=("30000")
+UPLOAD_STEPS=("39999")
 
 # 训练 / 统计时用到的 repo_id（HF 数据集）
-#DATA_REPO_ID="xiangxin0923/task_all_orig"
-DATA_REPO_ID="NathanWu7/tabero"
+DATA_REPO_ID="xiangxin0923/realworld_replayed_tabero"
 # 本地导出目录（脚本会自动创建/覆盖）
-EXPORT_DIR="export/pi05_lora_tacimg_tabero"
+EXPORT_DIR="export/pi05_lora_tacimg_realworld_replayed_tabero"
 
 # 上传成功后，是否清理本地 CKPT_SRC 下除 LOCAL_KEEP_STEPS 以外的 step（不可逆！）
-PRUNE_LOCAL_AFTER_UPLOAD="true"
+PRUNE_LOCAL_AFTER_UPLOAD="false"
 
 # 本地想保留的 step（可以包含你不想上传的 step，比如 30000）
 # 为空则不进行本地按 step 清理（即使 PRUNE_LOCAL_AFTER_UPLOAD=true）
-LOCAL_KEEP_STEPS=("30000" "49999")
+LOCAL_KEEP_STEPS=("39999")
 
 ########################
 # 脚本开始
@@ -131,13 +134,15 @@ fi
 
 echo "[INFO] 清理并从 Hugging Face 仓库 clone 到本地导出目录: ${EXPORT_DIR}"
 rm -rf "${EXPORT_DIR}"
-git clone "https://huggingface.co/${HF_REPO_ID}" "${EXPORT_DIR}"
+# 去掉末尾 /，拼成镜像或官方的 git URL
+HF_GIT_HOST="${HF_ENDPOINT%/}"
+git clone "${HF_GIT_HOST}/${HF_REPO_ID}" "${EXPORT_DIR}"
 
 cd "${EXPORT_DIR}"
 
 # 如果提供了 HF_TOKEN，则将 remote url 设置为带 token 的 https，避免 git push 401/askpass 交互失败。
 if [[ -n "${HF_TOKEN:-}" ]]; then
-  git remote set-url origin "https://user:${HF_TOKEN}@huggingface.co/${HF_REPO_ID}"
+  git remote set-url origin "https://user:${HF_TOKEN}@${HF_GIT_HOST#https://}/${HF_REPO_ID}"
 fi
 
 #----------------------------------------
