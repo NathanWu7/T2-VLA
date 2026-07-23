@@ -1456,7 +1456,7 @@ _CONFIGS = [
             ),
             extra_delta_transform=True,
         ),
-        batch_size=64,
+        batch_size=32,
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=10_000,
             peak_lr=2.5e-5,
