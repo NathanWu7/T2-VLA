@@ -1435,6 +1435,45 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        # 与 pi05_lora_tacimg_realworld_replayed_tabero 一致，仅 repo_id 换成 aligned 数据集。
+        name="pi05_lora_tacimg_realworld_replayed_tabero_aligned",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            discrete_state_input=True,
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_streams=(),
+            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
+        ),
+        data=TaberoTacImgDataConfig(
+            repo_id="xiangxin0923/realworld_replayed_tabero_aligned",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        batch_size=64,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=2.5e-5,
+            decay_steps=1_000_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=40_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         name="pi05_lora_tacfield_tabero",
         # Pi05 + LoRA：两路图像（image / wrist_image）+ tacfield（marker_motion，encoder-prefix）+ 13 维动作/力。
         # - tacfield：走 TCN 编码路径，作为 encoder-prefix tactile token；
