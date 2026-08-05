@@ -26,7 +26,7 @@ set -euo pipefail
 ########################
 
 # HF 仓库 id（模型 + norm_stats 都放这里）
-HF_REPO_ID="NathanWu7/pi05_lora_tacimg_realworld_replayed_tabero_aligned"
+HF_REPO_ID="NathanWu7/pi05_lora_tacimg_replay_sim_804"
 HF_REPO_TYPE="model"   # 你也可以改成 "dataset"
 
 # 本机直连 huggingface.co 常 TLS 失败；默认走镜像（可用环境变量覆盖）
@@ -34,25 +34,26 @@ HF_REPO_TYPE="model"   # 你也可以改成 "dataset"
 # export HF_ENDPOINT
 
 # 训练 config 名 + 实验名
-CONFIG_NAME="pi05_lora_tacimg_realworld_replayed_tabero_aligned"
-EXP_NAME="pi05_lora_tacimg_rr_tabero_aligned"
+CONFIG_NAME="pi05_lora_tacimg_replay_sim_804"
+EXP_NAME="pi05_lora_tacimg_replay_sim_804"
 
 # 想要上传/同步到 HF 的 checkpoint step（子目录名）。
 # 例：UPLOAD_STEPS=("49999")
 # 为空则导出整个实验目录（不推荐）。
-UPLOAD_STEPS=("39999")
+# config 里 num_train_steps=30000 → 最终步一般是 29999
+UPLOAD_STEPS=("29999")
 
 # 训练 / 统计时用到的 repo_id（HF 数据集）
-DATA_REPO_ID="xiangxin0923/realworld_replayed_tabero_aligned"
+DATA_REPO_ID="xiangxin0923/replay_sim_804"
 # 本地导出目录（脚本会自动创建/覆盖）
-EXPORT_DIR="export/pi05_lora_tacimg_realworld_replayed_tabero_aligned"
+EXPORT_DIR="export/pi05_lora_tacimg_replay_sim_804"
 
 # 上传成功后，是否清理本地 CKPT_SRC 下除 LOCAL_KEEP_STEPS 以外的 step（不可逆！）
 PRUNE_LOCAL_AFTER_UPLOAD="true"
 
 # 本地想保留的 step（可以包含你不想上传的 step，比如 30000）
 # 为空则不进行本地按 step 清理（即使 PRUNE_LOCAL_AFTER_UPLOAD=true）
-LOCAL_KEEP_STEPS=("39999")
+LOCAL_KEEP_STEPS=("29999")
 
 ########################
 # 脚本开始
