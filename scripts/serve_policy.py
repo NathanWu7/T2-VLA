@@ -51,6 +51,9 @@ class Args:
     # Record the policy's behavior for debugging.
     record: bool = False
 
+    # Optional versioned RLinf PEFT-LoRA bundle for a declared PyTorch base.
+    lora_bundle: str | None = None
+
     # Optional Tabero RLT bundle exported from RLinf Stage 1/2 checkpoints.
     rlt_bundle: str | None = None
 
@@ -93,20 +96,22 @@ def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) ->
 
 def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
-    if args.rlt_bundle is not None and args.dsrl_bundle is not None:
-        raise ValueError("--rlt-bundle and --dsrl-bundle are mutually exclusive.")
+    enabled_bundles = sum(bundle is not None for bundle in (args.lora_bundle, args.rlt_bundle, args.dsrl_bundle))
+    if enabled_bundles > 1:
+        raise ValueError("--lora-bundle, --rlt-bundle, and --dsrl-bundle are mutually exclusive.")
     match args.policy:
         case Checkpoint():
             return _policy_config.create_trained_policy(
                 _config.get_config(args.policy.config),
                 args.policy.dir,
                 default_prompt=args.default_prompt,
+                lora_bundle_path=args.lora_bundle,
                 rlt_bundle_path=args.rlt_bundle,
                 dsrl_bundle_path=args.dsrl_bundle,
             )
         case Default():
-            if args.rlt_bundle is not None or args.dsrl_bundle is not None:
-                raise ValueError("--rlt-bundle/--dsrl-bundle requires explicit checkpoint policy.")
+            if args.lora_bundle is not None or args.rlt_bundle is not None or args.dsrl_bundle is not None:
+                raise ValueError("--lora-bundle/--rlt-bundle/--dsrl-bundle requires explicit checkpoint policy.")
             return create_default_policy(args.env, default_prompt=args.default_prompt)
 
 

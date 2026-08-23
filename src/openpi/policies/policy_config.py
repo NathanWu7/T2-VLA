@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import openpi.models.model as _model
 import openpi.policies.policy as _policy
 import openpi.policies.tabero_dsrl_policy as _tabero_dsrl_policy
+import openpi.policies.tabero_lora_bundle as _tabero_lora_bundle
 import openpi.policies.tabero_rlt_policy as _tabero_rlt_policy
 import openpi.shared.download as download
 from openpi.training import checkpoints as _checkpoints
@@ -156,6 +157,7 @@ def create_trained_policy(
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
     pytorch_device: str | None = None,
+    lora_bundle_path: pathlib.Path | str | None = None,
     rlt_bundle_path: pathlib.Path | str | None = None,
     dsrl_bundle_path: pathlib.Path | str | None = None,
 ) -> _policy.Policy | _tabero_dsrl_policy.TaberoDSRLPolicy:
@@ -173,6 +175,9 @@ def create_trained_policy(
             from the checkpoint directory.
         pytorch_device: Device to use for PyTorch models (e.g., "cpu", "cuda", "cuda:0").
                       If None and is_pytorch=True, will use "cuda" if available, otherwise "cpu".
+        lora_bundle_path: Optional versioned RLinf PEFT-LoRA bundle. The declared
+            PyTorch base is loaded with a controlled partial-load contract, then
+            non-LoRA trainables and adapters are applied and audited before use.
         rlt_bundle_path: Optional exported Tabero RLT bundle. PyTorch PI0 is used as the
             frozen reference model and its normalized actions are replaced by the RLT actor.
         dsrl_bundle_path: Optional audited, allowlisted Tabero DSRL-SAC actor bundle. The actor
@@ -182,8 +187,9 @@ def create_trained_policy(
         The function automatically detects whether the model is PyTorch-based by checking for the
         presence of "model.safetensors" in the checkpoint directory.
     """
-    if rlt_bundle_path is not None and dsrl_bundle_path is not None:
-        raise ValueError("Tabero RLT and DSRL bundles are mutually exclusive.")
+    enabled_bundles = sum(path is not None for path in (lora_bundle_path, rlt_bundle_path, dsrl_bundle_path))
+    if enabled_bundles > 1:
+        raise ValueError("Tabero LoRA, RLT, and DSRL bundles are mutually exclusive.")
     if dsrl_bundle_path is not None and sample_kwargs is not None and "num_steps" in sample_kwargs:
         num_steps = sample_kwargs["num_steps"]
         if type(num_steps) is not int or num_steps != 10:
@@ -194,30 +200,46 @@ def create_trained_policy(
     # Check if this is a PyTorch model by looking for model.safetensors
     weight_path = os.path.join(checkpoint_dir, "model.safetensors")
     is_pytorch = os.path.isfile(weight_path)
-    if (rlt_bundle_path is not None or dsrl_bundle_path is not None) and not is_pytorch:
+    if (lora_bundle_path is not None or rlt_bundle_path is not None or dsrl_bundle_path is not None) and not is_pytorch:
         raise ValueError(
-            "Tabero RLT/DSRL bundle serving requires an explicit PyTorch checkpoint "
+            "Tabero LoRA/RLT/DSRL bundle serving requires an explicit PyTorch checkpoint "
             "directory containing model.safetensors."
         )
 
     logging.info("Loading model...")
+    data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     dsrl_base_model_sha256 = None
+    loaded_lora_bundle = None
     if is_pytorch:
         if dsrl_bundle_path is not None:
             with _stable_dsrl_checkpoint(weight_path) as (stable_weight_path, dsrl_base_model_sha256):
                 model = train_config.model.load_pytorch(train_config, stable_weight_path)
+        elif lora_bundle_path is not None:
+            if data_config.asset_id is None:
+                raise ValueError("Asset id is required to load a Tabero LoRA bundle.")
+            resolved_bundle_path = download.maybe_download(str(lora_bundle_path))
+            loaded_lora_bundle = _tabero_lora_bundle.load_lora_bundle_model(
+                train_config,
+                weight_path,
+                resolved_bundle_path,
+                base_config_name=train_config.name,
+                norm_asset_id=data_config.asset_id,
+            )
+            model = loaded_lora_bundle.model
         else:
             model = train_config.model.load_pytorch(train_config, weight_path)
         model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
     else:
         model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
-    data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
         # that the policy is using the same normalization stats as the original training process.
         if data_config.asset_id is None:
             raise ValueError("Asset id is required to load norm stats.")
-        norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
+        norm_assets_dir = (
+            loaded_lora_bundle.norm_assets_dir if loaded_lora_bundle is not None else checkpoint_dir / "assets"
+        )
+        norm_stats = _checkpoints.load_norm_stats(norm_assets_dir, data_config.asset_id)
 
     if is_pytorch and rlt_bundle_path is not None:
         model = _tabero_rlt_policy.TaberoRLTPolicyModel.from_bundle(
@@ -247,6 +269,10 @@ def create_trained_policy(
         except ImportError:
             pytorch_device = "cpu"
 
+    policy_metadata = dict(train_config.policy_metadata or {})
+    if loaded_lora_bundle is not None:
+        policy_metadata["tabero_lora_bundle"] = loaded_lora_bundle.metadata
+
     base_policy = _policy.Policy(
         model,
         transforms=[
@@ -263,7 +289,7 @@ def create_trained_policy(
             *repack_transforms.outputs,
         ],
         sample_kwargs=sample_kwargs,
-        metadata=train_config.policy_metadata,
+        metadata=policy_metadata,
         is_pytorch=is_pytorch,
         pytorch_device=pytorch_device if is_pytorch else None,
     )
