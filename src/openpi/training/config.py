@@ -1542,6 +1542,68 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        name="pi05_libero_lora_tacfield_tabero_xarm_gripper",
+        project_name="tabero-t2vla",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            discrete_state_input=True,
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_prefix_dim_in=9 * 440 * 2,
+            tactile_prefix_history=TABERO_TACTILE_HISTORY,
+            tactile_prefix_encoder_type="tcn",
+            tactile_prefix_use_reference_frame=True,
+            tactile_prefix_diff_from_reference=False,
+            tactile_streams=("tactile_prefix",),
+            tactile_loss_weight=0.01,
+        ),
+        # Two RTX 4090s start with four examples per physical GPU. A larger
+        # batch is accepted only after the dedicated memory preflight.
+        batch_size=8,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            # Preserve the RLinf schedule in terms of sample presentations:
+            # 1k/30k optimizer steps at batch 32 become 4k/120k at batch 8.
+            warmup_steps=4_000,
+            peak_lr=2.5e-5,
+            decay_steps=120_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        data=TaberoTacFieldDataConfig(
+            repo_id="replay_firm_tabero_xarm_gripper",
+            assets=AssetsConfig(asset_id="replay_firm_tabero_xarm_gripper"),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data/home/sim6g/code/tabero/models/pi05_libero/params",
+            # The official pi05_libero checkpoint is allowed to omit only the
+            # newly introduced LoRA and TacField TCN parameters.
+            missing_regex=r".*(?:lora|tactile_prefix_encoder).*",
+        ),
+        # 80k * batch 8 = 640k sample presentations, matching the current
+        # RLinf comparison run (20k * batch 32).
+        num_train_steps=80_000,
+        seed=0,
+        fsdp_devices=2,
+        log_interval=10,
+        save_interval=1_000,
+        keep_period=10_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+
+    TrainConfig(
         name="pi05_lora_tacforce_tabero",
         # Pi05 + LoRA：两路图像（image / wrist_image）+ tacforce（8×6 指力历史，encoder-prefix）+ 13 维动作/力。
         #
