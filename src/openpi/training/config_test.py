@@ -1,3 +1,5 @@
+import pathlib
+
 import numpy as np
 
 from openpi.models import model as _model
@@ -73,6 +75,31 @@ def test_pi05_libero_tacfield_xarm_gripper_training_config():
     assert config.num_train_steps == 80_000
     assert config.seed == 0
     assert config.fsdp_devices == 2
+
+
+def test_pi05_libero_tacfield_xarm_gripper_repaired_v1_training_config():
+    config = _config.get_config("pi05_libero_lora_tacfield_tabero_xarm_gripper_repaired_v1")
+
+    assert config.model.model_type == _model.ModelType.PI05
+    assert config.model.pi05 is True
+    assert config.model.action_horizon == 10
+    assert config.model.discrete_state_input is True
+    assert config.model.effective_action_dim == 13
+    assert config.model.tactile_prefix_dim_in == 9 * 440 * 2
+    assert config.model.tactile_prefix_history == 8
+    assert config.model.tactile_loss_weight == 0.01
+    assert config.model.padding_loss_weight == 1.0
+    assert config.model.expert_his_c_fut_loss_mode == "weighted_full"
+    assert config.data.repo_id == "replay_firm_tabero_xarm_gripper_repaired_v1"
+    assert config.data.assets.asset_id == "replay_firm_tabero_xarm_gripper_repaired_v1"
+    workspace_root = pathlib.Path(_config.__file__).resolve().parents[4]
+    assert config.weight_loader.params_path == str((workspace_root / "models/pi05_libero/params").resolve())
+    assert config.weight_loader.missing_regex == r".*(?:lora|tactile_prefix_encoder).*"
+    assert config.batch_size == 8
+    assert config.num_train_steps == 80_000
+    assert config.seed == 0
+    assert config.fsdp_devices == 1
+    assert config.tensorboard_enabled is True
 
 
 def test_pi0_tacfield_xarm_gripper_config_uses_50_step_continuous_state():

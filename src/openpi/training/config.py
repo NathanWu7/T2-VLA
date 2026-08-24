@@ -5,6 +5,7 @@ from collections.abc import Sequence
 import dataclasses
 import difflib
 import logging
+import os
 import pathlib
 from typing import Any, Literal, Protocol, TypeAlias
 
@@ -37,6 +38,16 @@ TACTILE_LOSS_WEIGHT: float = 0.1
 TABERO_TACTILE_HISTORY: int = 8
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
 Filter: TypeAlias = nnx.filterlib.Filter
+
+
+def _tabero_workspace_path(*parts: str) -> pathlib.Path:
+    """Resolve a path shared by the sibling Tabero repositories.
+
+    The environment override keeps packaged/remote installs portable, while the
+    source-tree fallback works for the standard ``<workspace>/T2-VLA`` layout.
+    """
+    workspace_root = pathlib.Path(os.environ.get("TABERO_WORKSPACE_ROOT", pathlib.Path(__file__).resolve().parents[4]))
+    return workspace_root.joinpath(*parts).expanduser().resolve()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -898,6 +909,12 @@ class TrainConfig:
     # If true, will enable wandb logging.
     wandb_enabled: bool = True
 
+    # If true, write the same scalar metrics to TensorBoard.
+    tensorboard_enabled: bool = False
+    # Base directory for TensorBoard event files. The config and experiment
+    # names are appended automatically to avoid collisions between runs.
+    tensorboard_base_dir: str = "./tensorboard"
+
     # Used to pass metadata to the policy server.
     policy_metadata: dict[str, Any] | None = None
 
@@ -918,6 +935,13 @@ class TrainConfig:
         if not self.exp_name:
             raise ValueError("--exp_name must be set")
         return (pathlib.Path(self.checkpoint_base_dir) / self.name / self.exp_name).resolve()
+
+    @property
+    def tensorboard_dir(self) -> pathlib.Path:
+        """Get the TensorBoard event directory for this experiment."""
+        if not self.exp_name:
+            raise ValueError("--exp_name must be set")
+        return (pathlib.Path(self.tensorboard_base_dir) / self.name / self.exp_name).resolve()
 
     @property
     def trainable_filter(self) -> nnx.filterlib.Filter:
@@ -1601,6 +1625,62 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi05_libero_lora_tacfield_tabero_xarm_gripper_repaired_v1",
+        project_name="tabero-t2vla",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            discrete_state_input=True,
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_prefix_dim_in=9 * 440 * 2,
+            tactile_prefix_history=TABERO_TACTILE_HISTORY,
+            tactile_prefix_encoder_type="tcn",
+            tactile_prefix_use_reference_frame=True,
+            tactile_prefix_diff_from_reference=False,
+            tactile_streams=("tactile_prefix",),
+            tactile_loss_weight=0.01,
+        ),
+        batch_size=8,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=4_000,
+            peak_lr=2.5e-5,
+            decay_steps=120_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        data=TaberoTacFieldDataConfig(
+            repo_id="replay_firm_tabero_xarm_gripper_repaired_v1",
+            assets=AssetsConfig(asset_id="replay_firm_tabero_xarm_gripper_repaired_v1"),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            str(_tabero_workspace_path("models", "pi05_libero", "params")),
+            missing_regex=r".*(?:lora|tactile_prefix_encoder).*",
+        ),
+        num_train_steps=80_000,
+        seed=0,
+        # The deployed host currently has one A100. A two-GPU host can override
+        # this with ``--fsdp-devices 2`` without changing the global batch.
+        fsdp_devices=1,
+        log_interval=10,
+        save_interval=1_000,
+        keep_period=10_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        tensorboard_enabled=True,
     ),
 
     TrainConfig(

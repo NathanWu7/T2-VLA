@@ -17,8 +17,10 @@ import tqdm_loggable.auto as tqdm
 import wandb
 
 import openpi.models.model as _model
+from openpi.models.pi0 import Pi0
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
+from openpi.shared.tactile_type import TactileType
 import openpi.training.checkpoints as _checkpoints
 import openpi.training.config as _config
 import openpi.training.data_loader as _data_loader
@@ -26,8 +28,6 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
-from openpi.models.pi0 import Pi0
-from openpi.shared.tactile_type import TactileType
 
 
 def init_logging():
@@ -70,6 +70,19 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
 
     if log_code:
         wandb.run.log_code(epath.Path(__file__).parent.parent)
+
+
+def init_tensorboard(config: _config.TrainConfig) -> Any | None:
+    if not config.tensorboard_enabled:
+        return None
+
+    # Import lazily so existing configs that disable TensorBoard do not require
+    # the dependency at import time.
+    from torch.utils.tensorboard import SummaryWriter
+
+    config.tensorboard_dir.mkdir(parents=True, exist_ok=True)
+    logging.info("Writing TensorBoard events to: %s", config.tensorboard_dir)
+    return SummaryWriter(log_dir=str(config.tensorboard_dir))
 
 
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
@@ -244,6 +257,8 @@ def main(config: _config.TrainConfig):
         resume=config.resume,
     )
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
+    tensorboard_writer = init_tensorboard(config)
+    learning_rate_schedule = config.lr_schedule.create()
 
     data_loader = _data_loader.create_data_loader(
         config,
@@ -291,9 +306,14 @@ def main(config: _config.TrainConfig):
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+            reduced_info["learning_rate"] = np.asarray(learning_rate_schedule(step))
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
+            if tensorboard_writer is not None:
+                for key, value in reduced_info.items():
+                    tensorboard_writer.add_scalar(key, float(value), step)
+                tensorboard_writer.flush()
             infos = []
         batch = next(data_iter)
 
@@ -302,6 +322,8 @@ def main(config: _config.TrainConfig):
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()
+    if tensorboard_writer is not None:
+        tensorboard_writer.close()
 
 
 if __name__ == "__main__":
