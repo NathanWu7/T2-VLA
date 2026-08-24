@@ -96,7 +96,7 @@ def test_pi05_libero_tacfield_xarm_gripper_repaired_v1_training_config():
     assert config.weight_loader.params_path == str((workspace_root / "models/pi05_libero/params").resolve())
     assert config.weight_loader.missing_regex == r".*(?:lora|tactile_prefix_encoder).*"
     assert config.batch_size == 8
-    assert config.num_train_steps == 80_000
+    assert config.num_train_steps == 20_000
     assert config.seed == 0
     assert config.fsdp_devices == 1
     assert config.tensorboard_enabled is True

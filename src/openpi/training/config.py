@@ -1665,7 +1665,7 @@ _CONFIGS = [
             str(_tabero_workspace_path("models", "pi05_libero", "params")),
             missing_regex=r".*(?:lora|tactile_prefix_encoder).*",
         ),
-        num_train_steps=80_000,
+        num_train_steps=20_000,
         seed=0,
         # The deployed host currently has one A100. A two-GPU host can override
         # this with ``--fsdp-devices 2`` without changing the global batch.
