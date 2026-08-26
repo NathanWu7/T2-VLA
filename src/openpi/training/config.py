@@ -1381,6 +1381,48 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        name="pi05_lora_tacimg_replay_sim_804",
+        # Official replay_sim_804 deployment contract (step 29999):
+        # three RGB streams, 13 effective action dimensions, no tactile token stream.
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=50,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            discrete_state_input=True,
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_streams=(),
+            tactile_loss_weight=0.01,
+        ),
+        data=TaberoTacImgDataConfig(
+            repo_id="xiangxin0923/replay_sim_804",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        batch_size=64,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=2.5e-5,
+            decay_steps=1_000_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=40_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         name="pi05_lora_tacimg_real",
         # Pi05 + LoRA：与 pi0_lora_tacimg_real 相同真机数据与 loss 设定（三路图像 + 13 维动作，无 tactile token），
         # 初始化与超参对齐 pi05_lora_tacimg_tabero（pi05_base、action_horizon=10、较低学习率）。
