@@ -6,6 +6,13 @@ to the config assets directory.
 """
 
 import dataclasses
+# Avoid silent segfaults from Arrow's bundled jemalloc on some cluster kernels.
+import os
+
+os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL", "system")
+import pyarrow as pa
+
+pa.set_memory_pool(pa.system_memory_pool())
 
 import numpy as np
 import tqdm
