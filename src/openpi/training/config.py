@@ -1419,7 +1419,7 @@ _CONFIGS = [
             extra_delta_transform=True,
         ),
         batch_size=32,
-        num_workers=0,
+        num_workers=2,
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=10_000,
             peak_lr=2.5e-5,
@@ -1502,7 +1502,7 @@ _CONFIGS = [
             extra_delta_transform=True,
         ),
         batch_size=32,
-        num_workers=0,
+        num_workers=2,
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=10_000,
             peak_lr=2.5e-5,
@@ -1624,7 +1624,47 @@ _CONFIGS = [
             extra_delta_transform=True,
         ),
         batch_size=16,
-        num_workers=0,
+        num_workers=2,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=2.5e-5,
+            decay_steps=1_000_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi05_lora_tacimg_realworld_task_blackboard",
+        # 与 pi05_lora_tacimg_realworld_replayed_task820 相同训练配置，仅换数据集。
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            discrete_state_input=True,
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_streams=(),
+            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
+        ),
+        data=TaberoTacImgDataConfig(
+            repo_id="xiangxin0923/realworld_task_blackboard",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        batch_size=16,
+        num_workers=2,
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=10_000,
             peak_lr=2.5e-5,
@@ -1669,7 +1709,7 @@ _CONFIGS = [
             extra_delta_transform=True,
         ),
         batch_size=16,
-        num_workers=0,
+        num_workers=2,
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=10_000,
             peak_lr=2.5e-5,
