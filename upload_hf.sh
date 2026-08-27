@@ -18,7 +18,7 @@ set -euo pipefail
 #        export HF_TOKEN=xxxxxxxx
 #
 # 运行方式（在工程根目录）：
-#   bash upload_pi0_tabero_force_to_hf.sh
+#   bash upload_hf.sh
 ###############################################################################
 
 ########################
@@ -26,34 +26,32 @@ set -euo pipefail
 ########################
 
 # HF 仓库 id（模型 + norm_stats 都放这里）
-HF_REPO_ID="NathanWu7/pi05_lora_tacimg_replay_sim_804"
+HF_REPO_ID="xiangxin0923/pi05_lora_tacfield_realworld_task820"
 HF_REPO_TYPE="model"   # 你也可以改成 "dataset"
 
-# 本机直连 huggingface.co 常 TLS 失败；默认走镜像（可用环境变量覆盖）
-# HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
-# export HF_ENDPOINT
-
 # 训练 config 名 + 实验名
-CONFIG_NAME="pi05_lora_tacimg_replay_sim_804"
-EXP_NAME="pi05_lora_tacimg_replay_sim_804"
+CONFIG_NAME="pi05_lora_tacimg_tabero"
+EXP_NAME="pi05_lora_tacimg_tabero"
 
 # 想要上传/同步到 HF 的 checkpoint step（子目录名）。
 # 例：UPLOAD_STEPS=("49999")
 # 为空则导出整个实验目录（不推荐）。
-# config 里 num_train_steps=30000 → 最终步一般是 29999
 UPLOAD_STEPS=("29999")
 
 # 训练 / 统计时用到的 repo_id（HF 数据集）
-DATA_REPO_ID="xiangxin0923/replay_sim_804"
+DATA_REPO_ID="xiangxin0923/realworld_task820"
 # 本地导出目录（脚本会自动创建/覆盖）
-EXPORT_DIR="export/pi05_lora_tacimg_replay_sim_804"
+EXPORT_DIR="export/pi05_lora_tacfield_realworld_task820"
 
 # 上传成功后，是否清理本地 CKPT_SRC 下除 LOCAL_KEEP_STEPS 以外的 step（不可逆！）
-PRUNE_LOCAL_AFTER_UPLOAD="true"
+PRUNE_LOCAL_AFTER_UPLOAD="false"
 
 # 本地想保留的 step（可以包含你不想上传的 step，比如 30000）
 # 为空则不进行本地按 step 清理（即使 PRUNE_LOCAL_AFTER_UPLOAD=true）
 LOCAL_KEEP_STEPS=("29999")
+
+CHECKPOINT_BASE_DIR="${CHECKPOINT_BASE_DIR:-/data/home/chenxiangyu/xiangxin/dataset/checkpoints}"
+ASSETS_BASE_DIR="${ASSETS_BASE_DIR:-/data/home/chenxiangyu/xiangxin/dataset/assets}"
 
 ########################
 # 脚本开始
@@ -74,14 +72,15 @@ if ! command -v git >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! uv run huggingface-cli whoami >/dev/null 2>&1; then
+if [[ -z "${HF_TOKEN:-}" ]] && ! uv run huggingface-cli whoami >/dev/null 2>&1; then
   echo "[ERROR] 当前未登录 Hugging Face 或登录已失效。" >&2
   echo "        请先执行：uv run huggingface-cli login" >&2
+  echo "        或设置 HF_TOKEN。" >&2
   exit 1
 fi
 
-CKPT_SRC="${ROOT_DIR}/checkpoints/${CONFIG_NAME}/${EXP_NAME}"
-NORM_SRC="${ROOT_DIR}/assets/${CONFIG_NAME}/${DATA_REPO_ID}"
+CKPT_SRC="${CHECKPOINT_BASE_DIR}/${LOCAL_CONFIG_NAME}/${LOCAL_EXP_NAME}"
+NORM_SRC="${ASSETS_BASE_DIR}/${LOCAL_CONFIG_NAME}/${DATA_REPO_ID}"
 
 if [[ ! -d "${CKPT_SRC}" ]]; then
   echo "[ERROR] 找不到 checkpoint 实验目录: ${CKPT_SRC}" >&2
@@ -135,15 +134,13 @@ fi
 
 echo "[INFO] 清理并从 Hugging Face 仓库 clone 到本地导出目录: ${EXPORT_DIR}"
 rm -rf "${EXPORT_DIR}"
-# 去掉末尾 /，拼成镜像或官方的 git URL
-HF_GIT_HOST="${HF_ENDPOINT%/}"
-git clone "${HF_GIT_HOST}/${HF_REPO_ID}" "${EXPORT_DIR}"
+git clone "https://huggingface.co/${HF_REPO_ID}" "${EXPORT_DIR}"
 
 cd "${EXPORT_DIR}"
 
 # 如果提供了 HF_TOKEN，则将 remote url 设置为带 token 的 https，避免 git push 401/askpass 交互失败。
 if [[ -n "${HF_TOKEN:-}" ]]; then
-  git remote set-url origin "https://user:${HF_TOKEN}@${HF_GIT_HOST#https://}/${HF_REPO_ID}"
+  git remote set-url origin "https://user:${HF_TOKEN}@huggingface.co/${HF_REPO_ID}"
 fi
 
 #----------------------------------------
