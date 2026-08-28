@@ -1503,6 +1503,89 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
+        name="pi05_lora_tacimg_realworld_replayed_task820_local",
+        # 与 pi05_lora_tacimg_realworld_task820 完全相同，仅使用本地 replayed task820 数据和本地 pi05_base。
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            discrete_state_input=True,
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_streams=(),
+            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
+        ),
+        data=TaberoTacImgDataConfig(
+            repo_id="realworld_replayed_task820",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        batch_size=32,
+        num_workers=2,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=2.5e-5,
+            decay_steps=1_000_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "../models/pi05_base/params"
+        ),
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi05_lora_tacimg_realworld_replayed_task820_force",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            discrete_state_input=True,
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_streams=(),
+            tactile_loss_weight=0.001,
+        ),
+        data=TaberoTacImgDataConfig(
+            repo_id="realworld_replayed_task820_firm",
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(asset_id="pi05_horizon50_tacimg_task820_firm"),
+            extra_delta_transform=True,
+        ),
+        batch_size=32,
+        num_workers=2,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=2.5e-5,
+            decay_steps=1_000_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "../models/pi05_base/params"
+        ),
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
         name="pi05_lora_tacimg_realworld_replayed_tabero",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -1620,45 +1703,6 @@ _CONFIGS = [
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=40_000,
-        freeze_filter=pi0_config.Pi0Config(
-            pi05=True,
-            discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
-        ).get_freeze_filter(),
-        ema_decay=None,
-    ),
-    TrainConfig(
-        # 与 pi05_lora_tacimg_realworld_replayed_tabero 一致
-        name="pi05_lora_tacimg_replay_sim_804",
-        model=pi0_config.Pi0Config(
-            pi05=True,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
-            discrete_state_input=True,
-            effective_action_dim=13,
-            tactile_type=TactileType.EXPERT_HIS_C_FUT,
-            tactile_dim=6,
-            tactile_dim_in=0,
-            tactile_streams=(),
-            tactile_loss_weight=TACTILE_LOSS_WEIGHT,
-        ),
-        data=TaberoTacImgDataConfig(
-            repo_id="xiangxin0923/replay_sim_804",
-            base_config=DataConfig(
-                prompt_from_task=True,
-            ),
-            extra_delta_transform=True,
-        ),
-        batch_size=32,
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=10_000,
-            peak_lr=2.5e-5,
-            decay_steps=1_000_000,
-            decay_lr=2.5e-6,
-        ),
-        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
