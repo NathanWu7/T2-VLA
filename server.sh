@@ -18,14 +18,14 @@ set -euo pipefail
 #        PORT=9000 bash server.sh pi0_lora_tacimg_tabero 49999
 #
 # 可选环境变量：
-#   - HF_OWNER: HF 仓库 owner（默认 NathanWu7）
+#   - HF_OWNER: HF 仓库 owner（默认 xiangxin0923）
 #   - HF_BASE_DIR: 本地 clone 基目录（默认 "${HOME}/hf"）
 #   - EXP_NAME: 覆盖实验名（默认与 config 相同）
 ###############################################################################
 
 usage() {
   local default_owner default_base
-  default_owner="${HF_OWNER:-NathanWu7}"
+  default_owner="${HF_OWNER:-xiangxin0923}"
   default_base="${HF_BASE_DIR:-$HOME/hf}"
 
   cat <<EOF
@@ -63,7 +63,7 @@ CKPT_STEP="${2:-49999}"
 EXP_NAME="${EXP_NAME:-${CONFIG_NAME}}"
 PORT="${PORT:-8000}"
 
-HF_OWNER="${HF_OWNER:-NathanWu7}"
+HF_OWNER="${HF_OWNER:-xiangxin0923}"
 HF_BASE_DIR="${HF_BASE_DIR:-${HOME}/hf}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
