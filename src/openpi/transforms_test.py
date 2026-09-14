@@ -5,6 +5,31 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.transforms as _transforms
 
 
+@pytest.mark.parametrize("with_state", [False, True])
+def test_state_conditioning_and_action_conversion(with_state):
+    class TextEncoder:
+        def encode(self, text, **kwargs):
+            return [ord(char) for char in text]
+
+    tokenizer = object.__new__(_tokenizer.PaligemmaTokenizer)
+    tokenizer._tokenizer = TextEncoder()  # noqa: SLF001
+    tokenizer._max_len = 200  # noqa: SLF001
+    tokenize = _transforms.TokenizePrompt(tokenizer, discrete_state_input=with_state)
+    results = []
+    for value in (-0.5, 0.5):
+        state = np.full(7, value, dtype=np.float32)
+        data = {"state": state.copy(), "actions": np.ones((2, 13), dtype=np.float32), "prompt": "grasp"}
+        data = _transforms.DeltaActions([True] * 6 + [False])(data)
+        np.testing.assert_array_equal(data["state"], state)
+        np.testing.assert_allclose(data["actions"][:, :6], 1 - value)
+        np.testing.assert_allclose(data["actions"][:, 6:], 1)
+        results.append(tokenize(data))
+    same = np.array_equal(results[0]["tokenized_prompt"], results[1]["tokenized_prompt"])
+    assert same is not with_state
+    if not with_state:
+        np.testing.assert_array_equal(results[0]["tokenized_prompt_mask"], results[1]["tokenized_prompt_mask"])
+
+
 def test_repack_transform():
     transform = _transforms.RepackTransform(
         structure={
