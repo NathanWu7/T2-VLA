@@ -91,7 +91,7 @@ def _sha256_fd(fd: int, size: int) -> str:
 @contextlib.contextmanager
 def _stable_dsrl_checkpoint(path: str | pathlib.Path):
     try:
-        import fcntl
+        import fcntl  # noqa: PLC0415
     except ImportError as error:
         raise ValueError("Tabero DSRL stable checkpoint loading requires fcntl.") from error
 
@@ -180,7 +180,7 @@ def create_trained_policy(
             non-LoRA trainables and adapters are applied and audited before use.
         rlt_bundle_path: Optional exported Tabero RLT bundle. PyTorch PI0 is used as the
             frozen reference model and its normalized actions are replaced by the RLT actor.
-        dsrl_bundle_path: Optional audited, allowlisted Tabero DSRL-SAC actor bundle. The actor
+        dsrl_bundle_path: Optional configuration-driven Tabero DSRL-SAC actor bundle. The actor
             consumes raw image/state/tactile observations and supplies deterministic PI0 noise.
 
     Note:
@@ -190,10 +190,6 @@ def create_trained_policy(
     enabled_bundles = sum(path is not None for path in (lora_bundle_path, rlt_bundle_path, dsrl_bundle_path))
     if enabled_bundles > 1:
         raise ValueError("Tabero LoRA, RLT, and DSRL bundles are mutually exclusive.")
-    if dsrl_bundle_path is not None and sample_kwargs is not None and "num_steps" in sample_kwargs:
-        num_steps = sample_kwargs["num_steps"]
-        if type(num_steps) is not int or num_steps != 10:
-            raise ValueError(f"Tabero DSRL bundle serving requires num_steps=10; got {num_steps!r}.")
     repack_transforms = repack_transforms or transforms.Group()
     checkpoint_dir = download.maybe_download(str(checkpoint_dir))
 
@@ -206,13 +202,29 @@ def create_trained_policy(
             "directory containing model.safetensors."
         )
 
+    dsrl_bundle = None
+    if dsrl_bundle_path is not None:
+        if norm_stats is not None:
+            raise ValueError("DSRL serving uses its hashed checkpoint normalization; overrides are unsupported.")
+        dsrl_bundle = _tabero_dsrl_policy.TaberoDSRLBundle.load(dsrl_bundle_path, base_checkpoint_dir=checkpoint_dir)
+        train_config = dsrl_bundle.configure_base(train_config)
+        expected_steps = dsrl_bundle.actor.contract.num_steps
+        sample_kwargs = dict(sample_kwargs or {})
+        supplied_steps = sample_kwargs.get("num_steps", expected_steps)
+        if type(supplied_steps) is not int or supplied_steps != expected_steps:
+            raise ValueError(f"DSRL bundle requires num_steps={expected_steps}.")
+        sample_kwargs["num_steps"] = expected_steps
+
     logging.info("Loading model...")
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
-    dsrl_base_model_sha256 = None
+    if dsrl_bundle is not None and data_config.use_quantile_norm != dsrl_bundle.manifest["base"]["use_quantile_norm"]:
+        raise ValueError("DSRL base normalization mode mismatch.")
     loaded_lora_bundle = None
     if is_pytorch:
         if dsrl_bundle_path is not None:
             with _stable_dsrl_checkpoint(weight_path) as (stable_weight_path, dsrl_base_model_sha256):
+                if dsrl_base_model_sha256 != dsrl_bundle.manifest["base"]["model_sha256"]:
+                    raise ValueError("DSRL base checkpoint changed after bundle validation.")
                 model = train_config.model.load_pytorch(train_config, stable_weight_path)
         elif lora_bundle_path is not None:
             if data_config.asset_id is None:
@@ -263,7 +275,7 @@ def create_trained_policy(
     # Determine the device to use for PyTorch models
     if is_pytorch and pytorch_device is None:
         try:
-            import torch
+            import torch  # noqa: PLC0415
 
             pytorch_device = "cuda" if torch.cuda.is_available() else "cpu"
         except ImportError:
@@ -293,12 +305,7 @@ def create_trained_policy(
         is_pytorch=is_pytorch,
         pytorch_device=pytorch_device if is_pytorch else None,
     )
-    if dsrl_bundle_path is not None:
-        actor = _tabero_dsrl_policy.TaberoDSRLActor.from_bundle(
-            dsrl_bundle_path,
-            base_checkpoint_dir=checkpoint_dir,
-            base_model_sha256=dsrl_base_model_sha256,
-            device=pytorch_device,
-        )
+    if dsrl_bundle is not None:
+        actor = dsrl_bundle.actor.to(device=pytorch_device)
         return _tabero_dsrl_policy.TaberoDSRLPolicy(base_policy, actor)
     return base_policy
