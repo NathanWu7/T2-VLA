@@ -411,7 +411,7 @@ class LeRobotLiberoTactileDataConfig(DataConfigFactory):
 
         data_transforms = _transforms.Group(
             inputs=[libero_policy.LiberoInputs(model_type=model_config.model_type)],
-            outputs=[libero_policy.LiberoForceOutputs()]
+            outputs=[libero_policy.LiberoForceOutputs()],
         )
 
         if self.extra_delta_transform:
@@ -1376,7 +1376,8 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -1458,7 +1459,8 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -1498,7 +1500,8 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -1533,14 +1536,13 @@ _CONFIGS = [
             decay_lr=2.5e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        weight_loader=weight_loaders.CheckpointWeightLoader(
-            "../models/pi05_base/params"
-        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("../models/pi05_base/params"),
         num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -1573,9 +1575,7 @@ _CONFIGS = [
             decay_lr=2.5e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        weight_loader=weight_loaders.CheckpointWeightLoader(
-            "../models/pi05_base/params"
-        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("../models/pi05_base/params"),
         num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
@@ -1619,7 +1619,8 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -1667,7 +1668,8 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -1706,7 +1708,8 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -1747,7 +1750,8 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -1787,7 +1791,8 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -1835,7 +1840,8 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -1866,6 +1872,102 @@ _CONFIGS = [
             extra_delta_transform=True,
         ),
         batch_size=16,
+        num_workers=2,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=2.5e-5,
+            decay_steps=1_000_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*",
+        ),
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi05_lora_tacfield_tabero_no_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            action_horizon=50,
+            discrete_state_input=False,
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_prefix_dim_in=9 * 198 * 2,
+            tactile_prefix_history=TABERO_TACTILE_HISTORY,
+            tactile_prefix_encoder_type="tcn",
+            tactile_prefix_use_reference_frame=True,
+            tactile_prefix_diff_from_reference=False,
+            tactile_streams=("tactile_prefix",),
+            tactile_loss_weight=0.01,
+        ),
+        data=TaberoTacFieldDataConfig(
+            repo_id="datasets/tabero",
+            assets=AssetsConfig(asset_id="pi05_horizon50_tacfield_tabero"),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        batch_size=64,
+        num_workers=2,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=2.5e-5,
+            decay_steps=1_000_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*",
+        ),
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi05_lora_tacfield_tabero_firmly_tightly_no_adverb_no_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            action_horizon=50,
+            discrete_state_input=False,
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_prefix_dim_in=9 * 198 * 2,
+            tactile_prefix_history=TABERO_TACTILE_HISTORY,
+            tactile_prefix_encoder_type="tcn",
+            tactile_prefix_use_reference_frame=True,
+            tactile_prefix_diff_from_reference=False,
+            tactile_streams=("tactile_prefix",),
+            tactile_loss_weight=0.01,
+        ),
+        data=TaberoTacFieldDataConfig(
+            repo_id="datasets/tabero_firmly_tightly_no_adverb",
+            assets=AssetsConfig(asset_id=("pi05_horizon50_tacfield_tabero_firmly_tightly_no_adverb")),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        batch_size=64,
         num_workers=2,
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=10_000,
@@ -1937,7 +2039,8 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -2149,7 +2252,6 @@ _CONFIGS = [
         ema_decay=None,
         tensorboard_enabled=True,
     ),
-
     TrainConfig(
         name="pi05_lora_tacforce_tabero",
         # Pi05 + LoRA：两路图像（image / wrist_image）+ tacforce（8×6 指力历史，encoder-prefix）+ 13 维动作/力。
@@ -2198,7 +2300,8 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=True,
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora",
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         ema_decay=None,
     ),
@@ -2499,7 +2602,6 @@ _CONFIGS = [
         ).get_freeze_filter(),
         ema_decay=None,
     ),
-
     TrainConfig(
         name="pi05_libero",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
@@ -2522,7 +2624,6 @@ _CONFIGS = [
         num_train_steps=30_000,
     ),
     #
-
     #
     # RoboArena configs.
     #

@@ -20,9 +20,7 @@ def test_pi05_tacfield_tabero_matches_xense_replay_contract():
     assert config.data.repo_id == "replay_firm_tabero"
     assert config.data.assets.asset_id == "replay_firm_tabero"
 
-    transformed = libero_policy.TaberoTacFieldInputs(
-        model_type=_model.ModelType.PI05
-    )(
+    transformed = libero_policy.TaberoTacFieldInputs(model_type=_model.ModelType.PI05)(
         {
             "image": np.zeros((32, 32, 3), dtype=np.uint8),
             "wrist_image": np.zeros((32, 32, 3), dtype=np.uint8),
@@ -41,6 +39,42 @@ def test_pi05_tacfield_tabero_matches_xense_replay_contract():
         "left_wrist_0_rgb",
         "right_wrist_0_rgb",
     }
+
+
+def test_pi05_tacfield_tabero_no_state_configs_match_198_marker_contract():
+    expected = {
+        "pi05_lora_tacfield_tabero_no_state": (
+            "datasets/tabero",
+            "pi05_horizon50_tacfield_tabero",
+        ),
+        "pi05_lora_tacfield_tabero_firmly_tightly_no_adverb_no_state": (
+            "datasets/tabero_firmly_tightly_no_adverb",
+            "pi05_horizon50_tacfield_tabero_firmly_tightly_no_adverb",
+        ),
+    }
+    for config_name, (repo_id, asset_id) in expected.items():
+        config = _config.get_config(config_name)
+        assert config.model.pi05 is True
+        assert config.model.action_horizon == 50
+        assert config.model.discrete_state_input is False
+        assert config.model.effective_action_dim == 13
+        assert config.model.tactile_prefix_dim_in == 9 * 198 * 2
+        assert config.model.tactile_prefix_history == 8
+        assert config.model.tactile_streams == ("tactile_prefix",)
+        assert config.data.repo_id == repo_id
+        assert config.data.assets.asset_id == asset_id
+
+    transformed = libero_policy.TaberoTacFieldInputs(model_type=_model.ModelType.PI05)(
+        {
+            "image": np.zeros((32, 32, 3), dtype=np.uint8),
+            "wrist_image": np.zeros((32, 32, 3), dtype=np.uint8),
+            "state": np.zeros(7, dtype=np.float32),
+            "actions": np.zeros((50, 13), dtype=np.float32),
+            "tactile_marker_motion": np.zeros((9, 198, 2), dtype=np.float32),
+            "prompt": "test",
+        }
+    )
+    assert transformed["tactile_prefix"].shape == (9, 396)
 
 
 def test_pi05_tacfield_xarm_gripper_config_uses_dedicated_asset():
@@ -117,9 +151,7 @@ def test_pi0_tacfield_xarm_gripper_config_uses_50_step_continuous_state():
     assert config.data.assets.asset_id == "replay_firm_tabero_xarm_gripper"
     assert config.num_train_steps == 5000
 
-    transformed = libero_policy.TaberoTacFieldInputs(
-        model_type=_model.ModelType.PI0
-    )(
+    transformed = libero_policy.TaberoTacFieldInputs(model_type=_model.ModelType.PI0)(
         {
             "image": np.zeros((32, 32, 3), dtype=np.uint8),
             "wrist_image": np.zeros((32, 32, 3), dtype=np.uint8),
