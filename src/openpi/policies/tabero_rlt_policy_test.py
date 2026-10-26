@@ -35,7 +35,9 @@ def _write_bundle(
     )
     manifest = {
         "format": "tabero_rlt_t2vla",
-        "format_version": 1,
+        "action_parameterization": "residual",
+        "action_composition": "reference_plus_bounded_delta",
+        "residual_action_bound": 4.0,
         "action_space": "model_normalized",
         "normalized_action_bound": normalized_action_bound,
         "z_dim": 2,
@@ -275,7 +277,9 @@ def _write_inference_bundle(tmp_path):
 
     manifest = {
         "format": "tabero_rlt_t2vla",
-        "format_version": 1,
+        "action_parameterization": "residual",
+        "action_composition": "reference_plus_bounded_delta",
+        "residual_action_bound": 4.0,
         "action_space": "model_normalized",
         "normalized_action_bound": 4.0,
         "z_dim": 2,
@@ -317,6 +321,61 @@ def test_rlt_policy_model_runs_prefix_encoder_reference_and_actor(tmp_path):
 
     expected = 4.0 * torch.tanh(torch.tensor([[[1.0], [-1.0]]]))
     torch.testing.assert_close(actions, expected)
+
+
+@pytest.mark.parametrize("mode", ["absolute", "residual"])
+@pytest.mark.parametrize("zero_residual", [False, True])
+def test_explicit_action_mode_controls_reference_addition(tmp_path, zero_residual, mode):
+    _write_inference_bundle(tmp_path)
+    if mode == "absolute":
+        manifest_path = tmp_path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest.update(action_parameterization="absolute", action_composition="direct")
+        manifest.pop("residual_action_bound")
+        manifest_path.write_text(json.dumps(manifest))
+    model = tabero_rlt_policy.TaberoRLTPolicyModel.from_bundle(_FakePI0(), tmp_path)
+    if zero_residual:
+        with torch.no_grad():
+            model.actor.actor_mean.bias.zero_()
+    # FakePI0 has zero velocity, so the reference equals the supplied noise.
+    reference = torch.tensor([[[5.0], [-6.0]]])
+    actions = model.sample_actions(
+        "cpu", SimpleNamespace(state=torch.tensor([[0.25]])), noise=reference.clone(), num_steps=2
+    )
+    delta = torch.zeros_like(reference) if zero_residual else 4 * torch.tanh(torch.tensor([[[1.0], [-1.0]]]))
+    expected = reference + delta if mode == "residual" else delta
+    torch.testing.assert_close(actions, expected)
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"action_parameterization": "absolute"},
+        {"action_composition": "direct"},
+        {"residual_action_bound": 2.0},
+        {"residual_action_bound": None},
+    ],
+)
+def test_bundle_rejects_ambiguous_or_inconsistent_action_contract(tmp_path, updates):
+    manifest = _write_bundle(tmp_path)
+    manifest.update(updates)
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="RLT bundle"):
+        tabero_rlt_policy.TaberoRLTBundle.load(tmp_path)
+
+
+def test_zero_residual_preserves_reference_precision_with_bf16_actor(tmp_path):
+    _write_inference_bundle(tmp_path)
+    model = tabero_rlt_policy.TaberoRLTPolicyModel.from_bundle(_FakePI0(), tmp_path)
+    model.actor.to(dtype=torch.bfloat16)
+    with torch.no_grad():
+        model.actor.actor_mean.bias.zero_()
+    reference = torch.tensor([[[5.01], [-6.03]]])
+    actual = model.sample_actions(
+        "cpu", SimpleNamespace(state=torch.tensor([[0.25]])), noise=reference.clone(), num_steps=2
+    )
+    assert actual.dtype == torch.float32
+    torch.testing.assert_close(actual, reference, rtol=0, atol=0)
 
 
 def test_rlt_policy_rejects_reference_step_override_that_differs_from_bundle(tmp_path):
@@ -413,7 +472,8 @@ class _FakeLoadedPI0(torch.nn.Module):
         return torch.zeros(1, 1, 1)
 
 
-def test_create_trained_policy_wraps_pytorch_model_when_rlt_bundle_is_set(tmp_path, monkeypatch):
+@pytest.mark.parametrize("action_mode", [None, "absolute", "residual"])
+def test_create_trained_policy_wraps_pytorch_model_when_rlt_bundle_is_set(tmp_path, monkeypatch, action_mode):
     (tmp_path / "model.safetensors").touch()
     loaded_model = _FakeLoadedPI0()
     wrapped_model = _FakeLoadedPI0()
@@ -445,6 +505,7 @@ def test_create_trained_policy_wraps_pytorch_model_when_rlt_bundle_is_set(tmp_pa
         norm_stats={},
         pytorch_device="cpu",
         rlt_bundle_path=tmp_path / "rlt",
+        rlt_action_parameterization=action_mode,
     )
 
     assert policy._model is wrapped_model  # noqa: SLF001
@@ -453,6 +514,7 @@ def test_create_trained_policy_wraps_pytorch_model_when_rlt_bundle_is_set(tmp_pa
             loaded_model,
             tmp_path / "rlt",
             {
+                "action_parameterization": action_mode,
                 "base_model_path": tmp_path,
                 "base_config_name": "pi0_test",
                 "norm_asset_id": None,
@@ -460,3 +522,38 @@ def test_create_trained_policy_wraps_pytorch_model_when_rlt_bundle_is_set(tmp_pa
             },
         )
     ]
+
+
+def test_bundle_rejects_missing_residual_semantics(tmp_path):
+    manifest = _write_bundle(tmp_path)
+    for key in ("action_parameterization", "action_composition", "residual_action_bound"):
+        manifest.pop(key)
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="explicit action semantics"):
+        tabero_rlt_policy.TaberoRLTBundle.load(tmp_path)
+
+
+@pytest.mark.parametrize("mode", ["absolute", "residual"])
+def test_unlabelled_bundle_requires_explicit_loading_mode(tmp_path, mode):
+    _write_inference_bundle(tmp_path)
+    path = tmp_path / "manifest.json"
+    manifest = json.loads(path.read_text())
+    for key in ("action_parameterization", "action_composition", "residual_action_bound"):
+        manifest.pop(key)
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="explicit action semantics"):
+        tabero_rlt_policy.TaberoRLTPolicyModel.from_bundle(_FakePI0(), tmp_path)
+    model = tabero_rlt_policy.TaberoRLTPolicyModel.from_bundle(_FakePI0(), tmp_path, action_parameterization=mode)
+    reference = torch.tensor([[[5.0], [-6.0]]])
+    actual = model.sample_actions(
+        "cpu", SimpleNamespace(state=torch.tensor([[0.25]])), noise=reference.clone(), num_steps=2
+    )
+    bounded = 4 * torch.tanh(torch.tensor([[[1.0], [-1.0]]]))
+    torch.testing.assert_close(actual, reference + bounded if mode == "residual" else bounded)
+    assert "format_version" not in model.bundle.manifest.to_dict()
+
+
+def test_explicit_load_cannot_override_declared_bundle_mode(tmp_path):
+    _write_bundle(tmp_path)
+    with pytest.raises(ValueError, match="conflicts"):
+        tabero_rlt_policy.TaberoRLTBundle.load(tmp_path, action_parameterization="absolute")

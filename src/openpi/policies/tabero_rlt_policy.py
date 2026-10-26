@@ -20,9 +20,7 @@ def checkpoint_sha256(path: str | Path) -> str:
     if checkpoint_path.is_dir():
         checkpoint_path = checkpoint_path / "model.safetensors"
     if not checkpoint_path.is_file():
-        raise FileNotFoundError(
-            f"Base model checkpoint file not found: {checkpoint_path}"
-        )
+        raise FileNotFoundError(f"Base model checkpoint file not found: {checkpoint_path}")
     digest = hashlib.sha256()
     with checkpoint_path.open("rb") as checkpoint_file:
         while chunk := checkpoint_file.read(8 * 1024 * 1024):
@@ -33,7 +31,6 @@ def checkpoint_sha256(path: str | Path) -> str:
 @dataclasses.dataclass(frozen=True)
 class TaberoRLTManifest:
     format: str
-    format_version: int
     action_space: str
     normalized_action_bound: float
     z_dim: int
@@ -52,6 +49,9 @@ class TaberoRLTManifest:
     rlt_use_mask: bool
     encoder_weights: str
     actor_weights: str
+    action_parameterization: str
+    action_composition: str
+    residual_action_bound: float | None = None
     actor_hidden_dim: int = 256
     base_model: str | None = None
     base_config_name: str | None = None
@@ -68,20 +68,42 @@ class TaberoRLTManifest:
     base_model_sha256: str | None = None
 
     @classmethod
-    def from_dict(cls, values: dict[str, Any]) -> TaberoRLTManifest:
+    def from_dict(cls, values: dict[str, Any], *, action_parameterization: str | None = None) -> TaberoRLTManifest:
+        values = dict(values)
+        declared = values.get("action_parameterization")
+        if action_parameterization is not None and declared is not None and declared != action_parameterization:
+            raise ValueError("RLT bundle action_parameterization conflicts with explicit loading argument.")
+        mode = declared if declared is not None else action_parameterization
+        if mode not in ("absolute", "residual"):
+            raise ValueError("RLT bundle requires explicit action semantics: absolute or residual.")
+        if declared is None:
+            # A caller must declare the semantics of unlabelled bundles. Never
+            # override contradictory composition/bound metadata.
+            values["action_parameterization"] = mode
+            values.setdefault("action_composition", "direct" if mode == "absolute" else "reference_plus_bounded_delta")
+            if mode == "residual":
+                values.setdefault("residual_action_bound", values.get("normalized_action_bound"))
+        elif "action_composition" not in values or (mode == "residual" and "residual_action_bound" not in values):
+            raise ValueError("RLT bundle has incomplete action semantics.")
         known = {field.name for field in dataclasses.fields(cls)}
         filtered = {key: value for key, value in values.items() if key in known}
         manifest = cls(**filtered)
-        if manifest.format != "tabero_rlt_t2vla" or manifest.format_version != 1:
-            raise ValueError(
-                f"Unsupported Tabero RLT bundle format: {manifest.format!r} version {manifest.format_version}."
-            )
+        if manifest.format != "tabero_rlt_t2vla":
+            raise ValueError(f"Unsupported Tabero RLT bundle format: {manifest.format!r}.")
         if manifest.action_space != "model_normalized":
             raise ValueError(
                 f"Tabero RLT T2-VLA inference requires action_space='model_normalized'; got {manifest.action_space!r}."
             )
         if not math.isfinite(manifest.normalized_action_bound) or manifest.normalized_action_bound <= 0:
             raise ValueError("normalized_action_bound must be finite and positive.")
+        if mode == "residual":
+            if (
+                manifest.action_composition != "reference_plus_bounded_delta"
+                or manifest.residual_action_bound != manifest.normalized_action_bound
+            ):
+                raise ValueError("RLT bundle residual composition or bound mismatch.")
+        elif manifest.action_composition != "direct" or manifest.residual_action_bound is not None:
+            raise ValueError("RLT bundle absolute actions require direct composition and no residual bound.")
         positive_dimensions = {
             "z_dim": manifest.z_dim,
             "proprio_dim": manifest.proprio_dim,
@@ -109,27 +131,19 @@ class TaberoRLTManifest:
         if not math.isfinite(manifest.rlt_mlp_ratio) or manifest.rlt_mlp_ratio <= 0:
             raise ValueError("rlt_mlp_ratio must be finite and positive.")
         if not manifest.rlt_use_normalized_proprio:
-            raise ValueError(
-                "Tabero RLT T2-VLA inference requires normalized proprio."
-            )
+            raise ValueError("Tabero RLT T2-VLA inference requires normalized proprio.")
         if manifest.state_indices is not None:
             if len(manifest.state_indices) != manifest.proprio_dim:
                 raise ValueError("state_indices length must equal proprio_dim.")
-            if any(index < 0 for index in manifest.state_indices) or len(
-                set(manifest.state_indices)
-            ) != len(manifest.state_indices):
+            if any(index < 0 for index in manifest.state_indices) or len(set(manifest.state_indices)) != len(
+                manifest.state_indices
+            ):
                 raise ValueError("state_indices must be unique non-negative integers.")
         if manifest.reference_sampling_method != "flow_ode":
-            raise ValueError(
-                "Tabero RLT T2-VLA inference requires reference sampling method "
-                "'flow_ode'."
-            )
+            raise ValueError("Tabero RLT T2-VLA inference requires reference sampling method 'flow_ode'.")
         if manifest.base_model_sha256 is not None and (
             len(manifest.base_model_sha256) != 64
-            or any(
-                character not in "0123456789abcdef"
-                for character in manifest.base_model_sha256.lower()
-            )
+            or any(character not in "0123456789abcdef" for character in manifest.base_model_sha256.lower())
         ):
             raise ValueError("base_model_sha256 must be a SHA-256 hex digest.")
         return manifest
@@ -137,7 +151,7 @@ class TaberoRLTManifest:
     def to_dict(self) -> dict[str, Any]:
         values = dataclasses.asdict(self)
         if self.actor_hidden_dim == 256:
-            # Version-1 test fixtures and early exporters omitted this default.
+            # Omit the default architecture width from serialized metadata.
             values.pop("actor_hidden_dim")
         for key in tuple(values):
             if values[key] is None and key != "state_indices":
@@ -151,10 +165,12 @@ class TaberoRLTBundle:
     manifest: TaberoRLTManifest
 
     @classmethod
-    def load(cls, path: str | Path) -> TaberoRLTBundle:
+    def load(cls, path: str | Path, *, action_parameterization: str | None = None) -> TaberoRLTBundle:
         root = Path(path)
         manifest_path = root / "manifest.json"
-        manifest = TaberoRLTManifest.from_dict(json.loads(manifest_path.read_text()))
+        manifest = TaberoRLTManifest.from_dict(
+            json.loads(manifest_path.read_text()), action_parameterization=action_parameterization
+        )
         for filename in (manifest.encoder_weights, manifest.actor_weights):
             weight_path = root / filename
             if not weight_path.is_file():
@@ -183,9 +199,7 @@ class TaberoRLTBundle:
         manifest = self.manifest
         if manifest.base_model_sha256 is not None:
             if base_model_path is None:
-                raise ValueError(
-                    "RLT bundle requires the base checkpoint path for checksum validation."
-                )
+                raise ValueError("RLT bundle requires the base checkpoint path for checksum validation.")
             actual_digest = checkpoint_sha256(base_model_path)
             if actual_digest != manifest.base_model_sha256.lower():
                 raise ValueError(
@@ -198,9 +212,7 @@ class TaberoRLTBundle:
             expected = Path(manifest.base_model).expanduser().resolve()
             actual = Path(base_model_path).expanduser().resolve()
             if actual != expected:
-                raise ValueError(
-                    f"RLT bundle base checkpoint mismatch: expected {expected}, got {actual}."
-                )
+                raise ValueError(f"RLT bundle base checkpoint mismatch: expected {expected}, got {actual}.")
         context_checks = (
             ("base config", manifest.base_config_name, base_config_name),
             ("norm asset", manifest.base_norm_asset_id, norm_asset_id),
@@ -388,6 +400,8 @@ class RLTTokenEncoder(nn.Module):
 
 
 class RLTActorMLP(nn.Module):
+    """Bounded actor output interpreted according to explicit bundle action semantics."""
+
     def __init__(
         self,
         *,
@@ -477,12 +491,13 @@ class TaberoRLTPolicyModel(nn.Module):
         base_model: nn.Module,
         bundle_path: str | Path,
         *,
+        action_parameterization: str | None = None,
         base_model_path: str | Path | None = None,
         base_config_name: str | None = None,
         norm_asset_id: str | None = None,
         use_quantile_norm: bool | None = None,
     ) -> TaberoRLTPolicyModel:
-        bundle = TaberoRLTBundle.load(bundle_path)
+        bundle = TaberoRLTBundle.load(bundle_path, action_parameterization=action_parameterization)
         bundle.validate_base_policy(
             base_model,
             base_model_path=base_model_path,
@@ -607,8 +622,7 @@ class TaberoRLTPolicyModel(nn.Module):
             state_index = torch.as_tensor(manifest.state_indices, device=state.device)
             if int(state_index.max().item()) >= state.shape[-1]:
                 raise ValueError(
-                    f"state_indices={manifest.state_indices} exceed normalized "
-                    f"state width {state.shape[-1]}."
+                    f"state_indices={manifest.state_indices} exceed normalized state width {state.shape[-1]}."
                 )
             proprio = state.index_select(-1, state_index)
         proprio = proprio.to(device=z_rl.device, dtype=torch.float32)
@@ -621,8 +635,13 @@ class TaberoRLTPolicyModel(nn.Module):
         )
         actor_param = next(self.actor.parameters())
         actor_input = actor_input.to(device=actor_param.device, dtype=actor_param.dtype)
-        return self.actor(actor_input).reshape(
+        actor_output = self.actor(actor_input).reshape(
             batch_size,
             manifest.num_action_chunks,
             manifest.action_dim,
         )
+        # Add once in normalized model space before the output transforms.
+        # Do not squash the sum: zero residual must preserve the reference.
+        if manifest.action_parameterization == "residual":
+            return ref_chunk.to(device=actor_output.device) + actor_output
+        return actor_output

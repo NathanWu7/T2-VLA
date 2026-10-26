@@ -57,6 +57,9 @@ class Args:
     # Optional Tabero RLT bundle exported from RLinf Stage 1/2 checkpoints.
     rlt_bundle: str | None = None
 
+    # Explicit source semantics for an unlabelled RLT bundle; conflicts are rejected.
+    rlt_action_parameterization: str | None = None
+
     # Optional audited, allowlisted Tabero DSRL-SAC actor bundle exported from RLinf.
     dsrl_bundle: str | None = None
 
@@ -96,6 +99,8 @@ def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) ->
 
 def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
+    if args.rlt_action_parameterization is not None and args.rlt_bundle is None:
+        raise ValueError("--rlt-action-parameterization requires --rlt-bundle.")
     enabled_bundles = sum(bundle is not None for bundle in (args.lora_bundle, args.rlt_bundle, args.dsrl_bundle))
     if enabled_bundles > 1:
         raise ValueError("--lora-bundle, --rlt-bundle, and --dsrl-bundle are mutually exclusive.")
@@ -107,6 +112,7 @@ def create_policy(args: Args) -> _policy.Policy:
                 default_prompt=args.default_prompt,
                 lora_bundle_path=args.lora_bundle,
                 rlt_bundle_path=args.rlt_bundle,
+                rlt_action_parameterization=args.rlt_action_parameterization,
                 dsrl_bundle_path=args.dsrl_bundle,
             )
         case Default():

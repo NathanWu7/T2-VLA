@@ -159,6 +159,7 @@ def create_trained_policy(
     pytorch_device: str | None = None,
     lora_bundle_path: pathlib.Path | str | None = None,
     rlt_bundle_path: pathlib.Path | str | None = None,
+    rlt_action_parameterization: str | None = None,
     dsrl_bundle_path: pathlib.Path | str | None = None,
 ) -> _policy.Policy | _tabero_dsrl_policy.TaberoDSRLPolicy:
     """Create a policy from a trained checkpoint.
@@ -179,7 +180,10 @@ def create_trained_policy(
             PyTorch base is loaded with a controlled partial-load contract, then
             non-LoRA trainables and adapters are applied and audited before use.
         rlt_bundle_path: Optional exported Tabero RLT bundle. PyTorch PI0 is used as the
-            frozen reference model and its normalized actions are replaced by the RLT actor.
+            frozen reference model. Explicit bundle semantics select complete actor
+            actions or a residual added to the normalized reference.
+        rlt_action_parameterization: Explicit absolute/residual semantics for an
+            unlabelled RLT bundle; must agree with any existing bundle declaration.
         dsrl_bundle_path: Optional configuration-driven Tabero DSRL-SAC actor bundle. The actor
             consumes raw image/state/tactile observations and supplies deterministic PI0 noise.
 
@@ -187,6 +191,8 @@ def create_trained_policy(
         The function automatically detects whether the model is PyTorch-based by checking for the
         presence of "model.safetensors" in the checkpoint directory.
     """
+    if rlt_action_parameterization is not None and rlt_bundle_path is None:
+        raise ValueError("rlt_action_parameterization requires rlt_bundle_path.")
     enabled_bundles = sum(path is not None for path in (lora_bundle_path, rlt_bundle_path, dsrl_bundle_path))
     if enabled_bundles > 1:
         raise ValueError("Tabero LoRA, RLT, and DSRL bundles are mutually exclusive.")
@@ -257,6 +263,7 @@ def create_trained_policy(
         model = _tabero_rlt_policy.TaberoRLTPolicyModel.from_bundle(
             model,
             rlt_bundle_path,
+            action_parameterization=rlt_action_parameterization,
             base_model_path=checkpoint_dir,
             base_config_name=train_config.name,
             norm_asset_id=data_config.asset_id,

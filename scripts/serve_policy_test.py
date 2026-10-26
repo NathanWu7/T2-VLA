@@ -36,10 +36,24 @@ def test_checkpoint_policy_forwards_rlt_bundle(monkeypatch):
                 "default_prompt": "test prompt",
                 "lora_bundle_path": None,
                 "rlt_bundle_path": "/tmp/rlt-bundle",
+                "rlt_action_parameterization": None,
                 "dsrl_bundle_path": None,
             },
         )
     ]
+
+
+def test_checkpoint_policy_forwards_explicit_rlt_mode(monkeypatch):
+    monkeypatch.setattr(serve_policy._config, "get_config", lambda name: name)  # noqa: SLF001
+    monkeypatch.setattr(serve_policy._policy_config, "create_trained_policy", lambda *args, **kwargs: kwargs)  # noqa: SLF001
+    args = serve_policy.Args(
+        rlt_bundle="/synthetic/bundle",
+        rlt_action_parameterization="absolute",
+        policy=serve_policy.Checkpoint(config="synthetic", dir="/synthetic/base"),
+    )
+    assert serve_policy.create_policy(args)["rlt_action_parameterization"] == "absolute"
+    with pytest.raises(ValueError, match="requires --rlt-bundle"):
+        serve_policy.create_policy(serve_policy.Args(rlt_action_parameterization="absolute"))
 
 
 def test_checkpoint_policy_forwards_dsrl_bundle(monkeypatch):
@@ -68,6 +82,7 @@ def test_checkpoint_policy_forwards_dsrl_bundle(monkeypatch):
                 "default_prompt": None,
                 "lora_bundle_path": None,
                 "rlt_bundle_path": None,
+                "rlt_action_parameterization": None,
                 "dsrl_bundle_path": "/tmp/dsrl-bundle",
             },
         )
@@ -106,6 +121,7 @@ def test_checkpoint_policy_forwards_lora_bundle(monkeypatch):
                 "default_prompt": None,
                 "lora_bundle_path": "/tmp/lora-bundle",
                 "rlt_bundle_path": None,
+                "rlt_action_parameterization": None,
                 "dsrl_bundle_path": None,
             },
         )
