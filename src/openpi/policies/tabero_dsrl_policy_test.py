@@ -198,6 +198,40 @@ def test_policy_keeps_original_observation_and_noise(contract, observation):
     assert torch.equal(calls[0][1], actor.noise(observation))
 
 
+def test_tacimg_uses_three_images_and_ignores_numeric_inputs(contract):
+    contract = dataclasses.replace(
+        contract,
+        use_state=False,
+        use_tactile=False,
+        image_keys=["main", "wrist", "tactile_image"],
+        image_shapes=[[37, 53, 3]] * 3,
+        tactile_shape=[],
+        tactile_latent_dim=0,
+        tactile_processing="none",
+        feature_order="ordered_images",
+    )
+    actor = TaberoDSRLActor(contract)
+    observation = {key: torch.randint(256, (37, 53, 3), dtype=torch.uint8) for key in contract.image_keys}
+    reference = actor.features(observation)
+    assert reference.shape == (1, 3 * contract.image_latent_dim)
+    assert not hasattr(actor, "actor_tactile_encoder")
+    assert not hasattr(actor, "actor_state_encoder")
+    extra = {
+        **observation,
+        "state": torch.tensor(float("nan")),
+        "tactile": torch.tensor(float("nan")),
+        "tactile_gripper_force": torch.tensor(float("nan")),
+    }
+    assert torch.equal(reference, actor.features(extra))
+    for key in contract.image_keys:
+        with pytest.raises(KeyError, match=key):
+            actor.noise({k: v for k, v in observation.items() if k != key})
+        changed = {**observation, key: torch.zeros_like(observation[key])}
+        assert not torch.equal(reference, actor.features(changed))
+    with pytest.raises(ValueError, match="Disabled marker"):
+        dataclasses.replace(contract, tactile_latent_dim=8)
+
+
 def test_stable_base_rejects_replacement(tmp_path):
     path = tmp_path / "weights"
     path.write_bytes(b"original")

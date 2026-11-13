@@ -55,15 +55,15 @@ class ActorContract:
     image_preprocessing: str
     tactile_processing: str
     feature_order: str
+    use_tactile: bool = True
 
     def __post_init__(self):
-        if type(self.use_state) is not bool:
-            raise ValueError("Actor use_state must be boolean.")
+        if type(self.use_state) is not bool or type(self.use_tactile) is not bool:
+            raise ValueError("Actor use_state and use_tactile must be boolean.")
         for field in (
             "state_dim",
             "image_latent_dim",
             "state_latent_dim",
-            "tactile_latent_dim",
             "noise_dim",
             "horizon",
             "num_steps",
@@ -81,27 +81,37 @@ class ActorContract:
         for shape in self.image_shapes:
             if len(shape) != 3 or shape[-1] != 3 or any(type(x) is not int or x <= 0 for x in shape):
                 raise ValueError("Image shapes must be positive HWC RGB shapes.")
-        if (
+        if self.use_tactile and (
             len(self.tactile_shape) != 3
             or self.tactile_shape[0] != 9
             or self.tactile_shape[2] != 2
             or any(type(x) is not int or x <= 0 for x in self.tactile_shape)
         ):
             raise ValueError("This training TCN requires [9, markers, 2] tactile input.")
+        if self.use_tactile:
+            if type(self.tactile_latent_dim) is not int or self.tactile_latent_dim <= 0:
+                raise ValueError("tactile_latent_dim must be a positive integer.")
+        elif self.tactile_shape != [] or type(self.tactile_latent_dim) is not int or self.tactile_latent_dim != 0:
+            raise ValueError("Disabled marker input must have empty shape and zero latent dimension.")
         if self.dtype not in {"bfloat16", "float32"}:
             raise ValueError("Actor dtype must be bfloat16 or float32.")
         # These identify implemented training semantics, not freely selectable transforms.
         if self.image_preprocessing != "uint8_bilinear64_align_false_minus_one_one":
             raise ValueError("Unsupported image preprocessing.")
-        if self.tactile_processing != "reference_plus_history8_no_difference_causal_tcn2_kernel3":
+        expected_processing = (
+            "reference_plus_history8_no_difference_causal_tcn2_kernel3" if self.use_tactile else "none"
+        )
+        if self.tactile_processing != expected_processing:
             raise ValueError("Unsupported tactile processing.")
-        expected_order = "state_ordered_images_tactile" if self.use_state else "ordered_images_tactile"
+        expected_order = (
+            ("state_" if self.use_state else "") + "ordered_images" + ("_tactile" if self.use_tactile else "")
+        )
         if self.feature_order != expected_order:
             raise ValueError("Unsupported feature order.")
 
     @property
     def tactile_input_dim(self):
-        return self.tactile_shape[1] * self.tactile_shape[2]
+        return self.tactile_shape[1] * self.tactile_shape[2] if self.use_tactile else 0
 
     @property
     def feature_dim(self):
@@ -189,7 +199,8 @@ class TaberoDSRLActor(nn.Module):
         self.actor_image_encoder = _ImageEncoder(contract.image_latent_dim)
         if contract.use_state:
             self.actor_state_encoder = _StateEncoder(contract.state_dim, contract.state_latent_dim)
-        self.actor_tactile_encoder = _TactileEncoder(contract.tactile_input_dim, contract.tactile_latent_dim)
+        if contract.use_tactile:
+            self.actor_tactile_encoder = _TactileEncoder(contract.tactile_input_dim, contract.tactile_latent_dim)
         self.to(dtype=getattr(torch, contract.dtype))
 
     @property
@@ -215,13 +226,19 @@ class TaberoDSRLActor(nn.Module):
             images.append(F.interpolate(image, size=(64, 64), mode="bilinear", align_corners=False) * 2 - 1)
         dtype = getattr(torch, c.dtype)
         state = tensor(c.state_key, [c.state_dim], torch.float32)[None].to(dtype) if c.use_state else None
-        tactile = tensor(c.tactile_key, c.tactile_shape, torch.float32).reshape(1, 9, c.tactile_input_dim).to(dtype)
+        tactile = (
+            tensor(c.tactile_key, c.tactile_shape, torch.float32).reshape(1, 9, c.tactile_input_dim).to(dtype)
+            if c.use_tactile
+            else None
+        )
         return torch.stack(images, dim=1).to(dtype), state, tactile
 
     @torch.no_grad()
     def features(self, observation):
         images, state, tactile = self.preprocess(observation)
-        features = [self.actor_image_encoder(images), self.actor_tactile_encoder(tactile)]
+        features = [self.actor_image_encoder(images)]
+        if self.contract.use_tactile:
+            features.append(self.actor_tactile_encoder(tactile))
         if self.contract.use_state:
             features.insert(0, self.actor_state_encoder(state))
         return torch.cat(features, dim=-1)
