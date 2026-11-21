@@ -73,6 +73,7 @@ class Pi0(_model.BaseModel):
         self.tactile_dim = config.tactile_dim
         self.tactile_history = config.tactile_history
         self.tactile_encoder_type = config.tactile_encoder_type
+        self.tactile_fusion = config.tactile_fusion
         # 触觉通道选择（"tactile_suffix" / "tactile_prefix" / 两者）。
         self.tactile_streams = tuple(config.tactile_streams)
         # tacforce（tactile_suffix）token 放置位置：默认 suffix（向后兼容），可选 prefix。
@@ -124,7 +125,27 @@ class Pi0(_model.BaseModel):
         self.tactile_suffix_encoder = None
         # 当把 tactile_suffix token 放到 prefix 序列时，可能需要做宽度对齐（action_expert_width -> paligemma_width）。
         self.tactile_suffix_to_prefix_proj = None
-        if self.tactile_type is TactileType.EXPERT_HIS_C_FUT:
+        if self.tactile_fusion == "taccorl":
+            steps = config.tactile_prefix_history + int(config.tactile_prefix_use_reference_frame)
+            self.marker_token_encoder = _tactile_encoder.MarkerTokenEncoder(
+                in_dim=config.tactile_prefix_dim_in // steps,
+                history_len=config.tactile_prefix_history,
+                has_reference_frame=config.tactile_prefix_use_reference_frame,
+                diff_from_reference=config.tactile_prefix_diff_from_reference,
+                prefix_width=paligemma_config.width,
+                suffix_width=action_expert_config.width,
+                prefix_num_tokens=config.tactile_prefix_num_tokens,
+                suffix_num_tokens=config.tactile_suffix_num_tokens,
+                rngs=rngs,
+            )
+            self.tactile_cross_attn = (
+                _tactile_encoder.TactilePrefixCrossAttention(
+                    paligemma_config.width, config.tactile_cross_attn_heads, rngs=rngs
+                )
+                if config.tactile_prefix_cross_attn
+                else None
+            )
+        elif self.tactile_type is TactileType.EXPERT_HIS_C_FUT:
             use_prefix = "tactile_prefix" in self.tactile_streams
             use_suffix = "tactile_suffix" in self.tactile_streams
 
@@ -248,9 +269,24 @@ class Pi0(_model.BaseModel):
 
         return tokens_list, input_mask_list, ar_mask_list
 
+    def _encode_marker_tokens(self, obs: _model.Observation) -> tuple[jax.Array, jax.Array] | None:
+        if self.tactile_fusion != "taccorl":
+            return None
+        if obs.tactile_prefix is None:
+            raise ValueError("taccorl requires observation.tactile_prefix containing per-frame marker vectors.")
+        return self.marker_token_encoder(obs.tactile_prefix)
+
+    def _marker_token_mask(self, obs: _model.Observation, tokens: jax.Array) -> jax.Array:
+        contact = obs.tactile_contact
+        if contact is None:
+            contact = jnp.ones(tokens.shape[:1], dtype=jnp.bool_)
+        if contact.shape != tokens.shape[:1]:
+            raise ValueError(f"tactile_contact must have shape {tokens.shape[:1]}, got {contact.shape}.")
+        return jnp.broadcast_to(contact[:, None], tokens.shape[:2])
+
     @at.typecheck
     def embed_prefix(
-        self, obs: _model.Observation
+        self, obs: _model.Observation, *, marker_tokens: tuple[jax.Array, jax.Array] | None = None
     ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"]]:
         input_mask = []
         ar_mask = []
@@ -278,11 +314,23 @@ class Pi0(_model.BaseModel):
             # full attention between image and language inputs
             ar_mask += [False] * tokenized_inputs.shape[1]
 
-        # add tactile tokens to LLM prefix if requested
-        tactile_tokens, tactile_input_mask, tactile_ar_mask = self._process_tactile_tokens(obs, mode="prefix")
-        tokens.extend(tactile_tokens)
-        input_mask.extend(tactile_input_mask)
-        ar_mask.extend(tactile_ar_mask)
+        if self.tactile_fusion == "taccorl":
+            if marker_tokens is None:
+                marker_tokens = self._encode_marker_tokens(obs)
+            base_tokens = jnp.concatenate(tokens, axis=1)
+            tactile_tokens = marker_tokens[0].astype(base_tokens.dtype)
+            tactile_mask = self._marker_token_mask(obs, tactile_tokens)
+            if self.tactile_cross_attn is not None:
+                base_tokens = self.tactile_cross_attn(base_tokens, tactile_tokens, tactile_mask)
+            tokens = [base_tokens, tactile_tokens]
+            input_mask.append(tactile_mask)
+            ar_mask.extend([False] * tactile_tokens.shape[1])
+        else:
+            # Existing single-token paths retain their original modules and dtypes.
+            tactile_tokens, tactile_input_mask, tactile_ar_mask = self._process_tactile_tokens(obs, mode="prefix")
+            tokens.extend(tactile_tokens)
+            input_mask.extend(tactile_input_mask)
+            ar_mask.extend(tactile_ar_mask)
 
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
@@ -291,7 +339,12 @@ class Pi0(_model.BaseModel):
 
     @at.typecheck
     def embed_suffix(
-        self, obs: _model.Observation, noisy_actions: _model.Actions, timestep: at.Float[at.Array, " b"]
+        self,
+        obs: _model.Observation,
+        noisy_actions: _model.Actions,
+        timestep: at.Float[at.Array, " b"],
+        *,
+        marker_tokens: tuple[jax.Array, jax.Array] | None = None,
     ) -> tuple[
         at.Float[at.Array, "b s emb"],
         at.Bool[at.Array, "b s"],
@@ -303,10 +356,18 @@ class Pi0(_model.BaseModel):
         tokens = []
 
         # 可选：在 expert suffix 前添加 tactile token（Pi0 与 Pi05 共享逻辑）。
-        tactile_tokens, tactile_input_mask, tactile_ar_mask = self._process_tactile_tokens(obs, mode="suffix")
-        tokens.extend(tactile_tokens)
-        input_mask.extend(tactile_input_mask)
-        ar_mask.extend(tactile_ar_mask)
+        if self.tactile_fusion == "taccorl":
+            if marker_tokens is None:
+                marker_tokens = self._encode_marker_tokens(obs)
+            tactile_tokens = marker_tokens[1]
+            tokens.append(tactile_tokens)
+            input_mask.append(self._marker_token_mask(obs, tactile_tokens))
+            ar_mask.extend([True] + [False] * (tactile_tokens.shape[1] - 1))
+        else:
+            tactile_tokens, tactile_input_mask, tactile_ar_mask = self._process_tactile_tokens(obs, mode="suffix")
+            tokens.extend(tactile_tokens)
+            input_mask.extend(tactile_input_mask)
+            ar_mask.extend(tactile_ar_mask)
 
         if not self.pi05:
             # 仅对标准 Pi0 添加显式 state token；Pi05 使用离散 state 编码，不再需要此 token。
@@ -374,11 +435,15 @@ class Pi0(_model.BaseModel):
         u_t = noise - actions
 
         # one big forward pass of prefix + suffix at once
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
-        suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
+        marker_tokens = self._encode_marker_tokens(observation)
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation, marker_tokens=marker_tokens)
+        suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
+            observation, x_t, time, marker_tokens=marker_tokens
+        )
         input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
         ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
         attn_mask = make_attn_mask(input_mask, ar_mask)
+        # Closed tactile tokens consume no positions, including before actions.
         positions = jnp.cumsum(input_mask, axis=1) - 1
         (prefix_out, suffix_out), _ = self.PaliGemma.llm(
             [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
@@ -474,7 +539,9 @@ class Pi0(_model.BaseModel):
             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
 
         # first fill KV cache with a forward pass of the prefix
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        # Share one marker encoding across both paths and all denoising steps.
+        marker_tokens = self._encode_marker_tokens(observation)
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation, marker_tokens=marker_tokens)
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
         _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
@@ -482,7 +549,7 @@ class Pi0(_model.BaseModel):
         def step(carry):
             x_t, time = carry
             suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
-                observation, x_t, jnp.broadcast_to(time, batch_size)
+                observation, x_t, jnp.broadcast_to(time, batch_size), marker_tokens=marker_tokens
             )
             # `suffix_attn_mask` is shape (b, suffix_len, suffix_len) indicating how the suffix tokens can attend to each
             # other
@@ -490,6 +557,8 @@ class Pi0(_model.BaseModel):
             # `prefix_attn_mask` is shape (b, suffix_len, prefix_len) indicating how the suffix tokens can attend to the
             # prefix tokens
             prefix_attn_mask = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
+            if self.tactile_fusion == "taccorl":
+                prefix_attn_mask = prefix_attn_mask & suffix_mask[:, :, None]
             # `combined_mask` is shape (b, suffix_len, prefix_len + suffix_len) indicating how the suffix tokens (which
             # generate the queries) can attend to the full prefix + suffix sequence (which generates the keys and values)
             full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)

@@ -204,6 +204,24 @@ class TaberoTacFieldInputs(transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class TaberoTacCoRLInputs(TaberoTacFieldInputs):
+    """TacField inputs with the TacCoRL contact gate computed in raw pixel space."""
+
+    contact_threshold: float = 1.0
+    contact_min_active: int = 5
+
+    def __call__(self, data: dict) -> dict:
+        inputs = super().__call__(data)
+        # Frame 0 is the reference; normalization happens after this transform.
+        # Use floating point for subtraction even if pixel coordinates are unsigned.
+        motion = np.asarray(data["tactile_marker_motion"], dtype=np.float64)
+        displacement = np.linalg.norm(motion[1:] - motion[0], axis=-1)
+        active_per_frame = np.count_nonzero(displacement > self.contact_threshold, axis=-1)
+        inputs["tactile_contact"] = np.bool_(np.any(active_per_frame >= self.contact_min_active))
+        return inputs
+
+
+@dataclasses.dataclass(frozen=True)
 class TaberoTacForceInputs(transforms.DataTransformFn):
     """
     Tabero 输入（2 路图像 + 8×6 触觉指力历史 + 13 维动作）。

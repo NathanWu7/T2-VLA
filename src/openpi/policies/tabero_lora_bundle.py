@@ -190,6 +190,20 @@ def _validate_policy_contract(
         actual = contract.get(field)
         if expected != actual:
             raise ValueError(f"LoRA bundle policy contract {field} mismatch: bundle={actual!r}, config={expected!r}")
+    # Older bundles predate marker-token fusion. Missing keys mean Pi0Config defaults,
+    # so a legacy bundle cannot silently be paired with a TacCoRL serving config.
+    fusion_defaults = {
+        "tactile_fusion": "none",
+        "tactile_prefix_num_tokens": 8,
+        "tactile_suffix_num_tokens": 8,
+        "tactile_prefix_cross_attn": True,
+        "tactile_cross_attn_heads": 8,
+    }
+    for field, default in fusion_defaults.items():
+        expected = getattr(train_config.model, field, default)
+        actual = contract.get(field, default)
+        if expected != actual:
+            raise ValueError(f"LoRA bundle policy contract {field} mismatch: bundle={actual!r}, config={expected!r}")
     expected_family = "pi05" if bool(getattr(train_config.model, "pi05", False)) else "pi0"
     if contract.get("model_family") not in {None, expected_family}:
         raise ValueError(

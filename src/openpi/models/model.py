@@ -115,6 +115,10 @@ class Observation(Generic[ArrayT]):
     # Token loss mask (for FAST autoregressive model).
     token_loss_mask: at.Bool[ArrayT, "*b l"] | None = None
 
+    # Contact gate supplied by the data pipeline from raw marker displacement.
+    # None means open; appended here to preserve positional construction of Observation.
+    tactile_contact: at.Bool[ArrayT, "*b"] | None = None
+
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
         """This method defines the mapping between unstructured data (i.e., nested dict) to the structured Observation format."""
@@ -133,6 +137,7 @@ class Observation(Generic[ArrayT]):
             state=data["state"],
             tactile_suffix=data.get("tactile_suffix"),
             tactile_prefix=data.get("tactile_prefix"),
+            tactile_contact=data.get("tactile_contact"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -213,11 +218,13 @@ def preprocess_observation(
     state = observation.state
     tactile_suffix = observation.tactile_suffix
     tactile_prefix = observation.tactile_prefix
+    tactile_contact = observation.tactile_contact
 
     if tactile_type is TactileType.NO:
         # 模型完全忽略所有触觉通道。
         tactile_suffix = None
         tactile_prefix = None
+        tactile_contact = None
 
     return Observation(
         images=out_images,
@@ -225,6 +232,7 @@ def preprocess_observation(
         state=state,
         tactile_suffix=tactile_suffix,
         tactile_prefix=tactile_prefix,
+        tactile_contact=tactile_contact,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,

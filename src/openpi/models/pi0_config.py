@@ -100,6 +100,15 @@ class Pi0Config(_model.BaseModelConfig):
     #          但仍希望复用 tacforce 的 MLP 编码器（action_expert 宽度）。
     tactile_suffix_placement: str = "suffix"
 
+    # Opt-in marker-token fusion. The existing single-token paths are unchanged when off.
+    # taccorl always uses a TCN over tactile_prefix: dim_in is frames * markers * 2,
+    # with frames = history + int(use_reference_frame). It needs no suffix observation.
+    tactile_fusion: str = "none"  # "none" | "taccorl"
+    tactile_prefix_num_tokens: int = 8
+    tactile_suffix_num_tokens: int = 8
+    tactile_prefix_cross_attn: bool = True
+    tactile_cross_attn_heads: int = 8
+
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
@@ -109,6 +118,32 @@ class Pi0Config(_model.BaseModelConfig):
             object.__setattr__(self, "tactile_dim_in", self.tactile_dim)
         if self.effective_action_dim is None:
             object.__setattr__(self, "effective_action_dim", self.action_dim)
+        if self.tactile_fusion not in ("none", "taccorl"):
+            raise ValueError(f"Unknown tactile_fusion: {self.tactile_fusion!r}.")
+        if self.tactile_fusion == "taccorl":
+            if self.tactile_type is not TactileType.EXPERT_HIS_C_FUT:
+                raise ValueError("taccorl requires tactile_type=EXPERT_HIS_C_FUT.")
+            if set(self.tactile_streams) != {"tactile_prefix", "tactile_suffix"}:
+                raise ValueError("taccorl requires both tactile_prefix and tactile_suffix in tactile_streams.")
+            if self.tactile_suffix_placement != "suffix":
+                raise ValueError("taccorl requires tactile_suffix_placement='suffix'.")
+            for name in ("tactile_prefix_dim_in", "tactile_prefix_history"):
+                value = getattr(self, name)
+                if value is None or value <= 0:
+                    raise ValueError(f"taccorl requires {name} > 0.")
+            for name in ("tactile_prefix_use_reference_frame", "tactile_prefix_diff_from_reference"):
+                if getattr(self, name) is None:
+                    raise ValueError(f"taccorl requires {name} to be set explicitly.")
+            steps = self.tactile_prefix_history + int(self.tactile_prefix_use_reference_frame)
+            if self.tactile_prefix_dim_in % steps or (self.tactile_prefix_dim_in // steps) % 2:
+                raise ValueError("taccorl requires tactile_prefix_dim_in = frames * markers * 2.")
+            for name in ("tactile_prefix_num_tokens", "tactile_suffix_num_tokens", "tactile_cross_attn_heads"):
+                if getattr(self, name) <= 0:
+                    raise ValueError(f"taccorl requires {name} > 0.")
+            if self.tactile_prefix_cross_attn:
+                width = _gemma.get_config(self.paligemma_variant).width
+                if width % self.tactile_cross_attn_heads:
+                    raise ValueError("tactile_cross_attn_heads must divide the PaliGemma width.")
 
     @property
     @override
@@ -144,6 +179,15 @@ class Pi0Config(_model.BaseModelConfig):
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
             )
+            if self.tactile_fusion == "taccorl":
+                steps = self.tactile_prefix_history + int(self.tactile_prefix_use_reference_frame)
+                observation_spec = dataclasses.replace(
+                    observation_spec,
+                    tactile_prefix=jax.ShapeDtypeStruct(
+                        [batch_size, steps, self.tactile_prefix_dim_in // steps], jnp.float32
+                    ),
+                    tactile_contact=jax.ShapeDtypeStruct([batch_size], jnp.bool_),
+                )
         action_spec = jax.ShapeDtypeStruct([batch_size, self.action_horizon, self.action_dim], jnp.float32)
 
         return observation_spec, action_spec

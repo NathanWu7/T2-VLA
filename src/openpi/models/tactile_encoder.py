@@ -95,6 +95,73 @@ class TactileTCNBlock(nnx.Module):
         return nnx.swish(y + residual)
 
 
+def _select_tcn_frames(
+    tactile: jax.Array, *, history_len: int, has_reference_frame: bool, diff_from_reference: bool
+) -> jax.Array:
+    """Shared frame selection; preserve the legacy TCN's reference/history semantics."""
+    # 允许输入为 [b, n, in_dim] 或 [b, in_dim]（后者视作单步序列）。
+    if tactile.ndim == 2:
+        tactile_seq = tactile[:, None, :]
+    elif tactile.ndim == 3:
+        tactile_seq = tactile
+    else:
+        raise ValueError(
+            f"TactileTCNEncoder expects input of rank 2 or 3, got shape {tactile.shape}."
+        )
+
+    b, n, d = tactile_seq.shape
+    H = history_len
+
+    if has_reference_frame:
+        # 至少需要 2 帧（1 基准 + 至少 1 帧历史）。
+        if n < 2:
+            raise ValueError(
+                "TactileTCNEncoder with has_reference_frame=True expects at least 2 frames, "
+                f"got {n} (shape={tactile_seq.shape})."
+            )
+        if diff_from_reference:
+            # 旧版差分逻辑：只用 H 帧历史，每帧减基准帧。
+            max_hist = min(H, n - 1)
+            baseline = tactile_seq[:, 0:1, :]           # [B, 1, d]
+            history = tactile_seq[:, 1 : 1 + max_hist]  # [B, max_hist, d]
+            history = history - baseline                 # [B, max_hist, d]
+            if max_hist != H:
+                logger.warning(
+                    "TactileTCNEncoder(diff): expected history_len=%d (excluding baseline), "
+                    "but only %d history frames available; using %d frames.",
+                    H,
+                    n - 1,
+                    max_hist,
+                )
+            seq_for_tcn = history
+        else:
+            # 新版“9 帧直接 TCN”逻辑：直接把 [baseline + H 帧历史] 一起送入 TCN。
+            max_steps = min(H + 1, n)
+            seq_for_tcn = tactile_seq[:, :max_steps, :]  # [B, 1+H, d] 或更短
+            if max_steps != H + 1:
+                logger.warning(
+                    "TactileTCNEncoder(full-seq): expected 1+history_len=%d frames, "
+                    "but only %d available; using %d frames.",
+                    H + 1,
+                    n,
+                    max_steps,
+                )
+    else:
+        # 不使用基准帧：只保留最近 H 帧。
+        if n >= H:
+            seq_for_tcn = tactile_seq[:, -H:, :]
+        else:
+            seq_for_tcn = tactile_seq
+            logger.warning(
+                "TactileTCNEncoder: expected history_len=%d, but only %d frames available; "
+                "using all frames.",
+                H,
+                n,
+            )
+
+    return seq_for_tcn
+
+
 class TactileTCNEncoder(nnx.Module):
     """多层 TCN encoder，用于将多帧 tactile 序列编码为单个 token embedding。
 
@@ -142,65 +209,12 @@ class TactileTCNEncoder(nnx.Module):
         self.out_proj = nnx.Linear(hidden_dim, emb_dim, rngs=rngs)
 
     def __call__(self, tactile: jax.Array) -> at.Float[at.Array, "b emb"]:
-        # 允许输入为 [b, n, in_dim] 或 [b, in_dim]（后者视作单步序列）。
-        if tactile.ndim == 2:
-            tactile_seq = tactile[:, None, :]
-        elif tactile.ndim == 3:
-            tactile_seq = tactile
-        else:
-            raise ValueError(
-                f"TactileTCNEncoder expects input of rank 2 or 3, got shape {tactile.shape}."
-            )
-
-        b, n, d = tactile_seq.shape
-        H = self.history_len
-
-        if self.has_reference_frame:
-            # 至少需要 2 帧（1 基准 + 至少 1 帧历史）。
-            if n < 2:
-                raise ValueError(
-                    "TactileTCNEncoder with has_reference_frame=True expects at least 2 frames, "
-                    f"got {n} (shape={tactile_seq.shape})."
-                )
-            if self.diff_from_reference:
-                # 旧版差分逻辑：只用 H 帧历史，每帧减基准帧。
-                max_hist = min(H, n - 1)
-                baseline = tactile_seq[:, 0:1, :]           # [B, 1, d]
-                history = tactile_seq[:, 1 : 1 + max_hist]  # [B, max_hist, d]
-                history = history - baseline                 # [B, max_hist, d]
-                if max_hist != H:
-                    logger.warning(
-                        "TactileTCNEncoder(diff): expected history_len=%d (excluding baseline), "
-                        "but only %d history frames available; using %d frames.",
-                        H,
-                        n - 1,
-                        max_hist,
-                    )
-                seq_for_tcn = history
-            else:
-                # 新版“9 帧直接 TCN”逻辑：直接把 [baseline + H 帧历史] 一起送入 TCN。
-                max_steps = min(H + 1, n)
-                seq_for_tcn = tactile_seq[:, :max_steps, :]  # [B, 1+H, d] 或更短
-                if max_steps != H + 1:
-                    logger.warning(
-                        "TactileTCNEncoder(full-seq): expected 1+history_len=%d frames, "
-                        "but only %d available; using %d frames.",
-                        H + 1,
-                        n,
-                        max_steps,
-                    )
-        else:
-            # 不使用基准帧：只保留最近 H 帧。
-            if n >= H:
-                seq_for_tcn = tactile_seq[:, -H:, :]
-            else:
-                seq_for_tcn = tactile_seq
-                logger.warning(
-                    "TactileTCNEncoder: expected history_len=%d, but only %d frames available; "
-                    "using all frames.",
-                    H,
-                    n,
-                )
+        seq_for_tcn = _select_tcn_frames(
+            tactile,
+            history_len=self.history_len,
+            has_reference_frame=self.has_reference_frame,
+            diff_from_reference=self.diff_from_reference,
+        )
 
         h = seq_for_tcn
         for block in self.blocks.values():
@@ -208,6 +222,111 @@ class TactileTCNEncoder(nnx.Module):
         # 使用最后一个时间步的 hidden 作为整体 tactile 序列的表示。
         h_last = h[:, -1, :]  # [b, hidden_dim]
         return self.out_proj(h_last)  # [b, emb_dim]
+
+
+class MarkerTokenEncoder(nnx.Module):
+    """One temporal backbone, with independent prefix/suffix token projection heads.
+
+    Inputs are per-frame flattened marker coordinates [B, T, markers * 2]. Two
+    causal TCN blocks use the action-expert width (no additional width config),
+    and pool the last step. Frame selection matches TactileTCNEncoder exactly.
+    """
+
+    def __init__(
+        self,
+        *,
+        in_dim: int,
+        history_len: int,
+        has_reference_frame: bool,
+        diff_from_reference: bool,
+        prefix_width: int,
+        suffix_width: int,
+        prefix_num_tokens: int,
+        suffix_num_tokens: int,
+        rngs: nnx.Rngs,
+    ):
+        if in_dim <= 0 or in_dim % 2:
+            raise ValueError("MarkerTokenEncoder.in_dim must be a positive number of marker coordinate pairs.")
+        if history_len <= 0 or min(prefix_num_tokens, suffix_num_tokens) <= 0:
+            raise ValueError("MarkerTokenEncoder requires positive history length and token counts.")
+        self.in_dim = in_dim
+        self.history_len = history_len
+        self.has_reference_frame = has_reference_frame
+        self.diff_from_reference = diff_from_reference
+        self.prefix_width = prefix_width
+        self.suffix_width = suffix_width
+        self.prefix_num_tokens = prefix_num_tokens
+        self.suffix_num_tokens = suffix_num_tokens
+        self.blocks = nnx.Dict(
+            block_0=TactileTCNBlock(in_dim, suffix_width, rngs=rngs),
+            block_1=TactileTCNBlock(suffix_width, suffix_width, rngs=rngs),
+        )
+        self.prefix_proj = nnx.Linear(suffix_width, prefix_num_tokens * prefix_width, rngs=rngs)
+        self.suffix_proj = nnx.Linear(suffix_width, suffix_num_tokens * suffix_width, rngs=rngs)
+        self.prefix_token_embedding = nnx.Param(
+            jax.random.normal(rngs.params(), (prefix_num_tokens, prefix_width)) * 0.02
+        )
+        self.suffix_token_embedding = nnx.Param(
+            jax.random.normal(rngs.params(), (suffix_num_tokens, suffix_width)) * 0.02
+        )
+
+    def __call__(self, tactile: jax.Array) -> tuple[jax.Array, jax.Array]:
+        if tactile.ndim != 3 or tactile.shape[-1] != self.in_dim:
+            raise ValueError(
+                f"MarkerTokenEncoder expects [B, T, {self.in_dim}] per-frame marker vectors, got {tactile.shape}."
+            )
+        hidden = _select_tcn_frames(
+            tactile,
+            history_len=self.history_len,
+            has_reference_frame=self.has_reference_frame,
+            diff_from_reference=self.diff_from_reference,
+        )
+        for block in self.blocks.values():
+            hidden = block(hidden)
+        pooled = hidden[:, -1, :]
+        prefix = self.prefix_proj(pooled).reshape(-1, self.prefix_num_tokens, self.prefix_width)
+        suffix = self.suffix_proj(pooled).reshape(-1, self.suffix_num_tokens, self.suffix_width)
+        return prefix + self.prefix_token_embedding.value, suffix + self.suffix_token_embedding.value
+
+
+class TactilePrefixCrossAttention(nnx.Module):
+    """Pre-LN multi-head cross-attention with a zero-initialized gated residual.
+
+    Base tokens supply queries; marker prefix tokens supply keys and values.
+    Softmax is evaluated in float32 and all-masked rows are explicitly zeroed,
+    so closed contact gates remain finite even in bfloat16.
+    """
+
+    def __init__(self, width: int, num_heads: int, *, rngs: nnx.Rngs):
+        if num_heads <= 0 or width % num_heads:
+            raise ValueError("Cross-attention num_heads must be positive and divide the embedding width.")
+        self.num_heads = num_heads
+        self.head_dim = width // num_heads
+        self.norm = nnx.LayerNorm(width, rngs=rngs)
+        self.query = nnx.Linear(width, width, use_bias=True, rngs=rngs)
+        self.key = nnx.Linear(width, width, use_bias=True, rngs=rngs)
+        self.value = nnx.Linear(width, width, use_bias=True, rngs=rngs)
+        self.out = nnx.Linear(width, width, use_bias=True, rngs=rngs)
+        self.alpha = nnx.Param(jnp.zeros((), dtype=jnp.float32))
+
+    def __call__(self, base: jax.Array, tactile: jax.Array, tactile_mask: jax.Array) -> jax.Array:
+        def split_heads(x):
+            return x.reshape(*x.shape[:-1], self.num_heads, self.head_dim).astype(base.dtype)
+
+        query = split_heads(self.query(self.norm(base)))
+        key = split_heads(self.key(tactile))
+        value = split_heads(self.value(tactile))
+        logits = jnp.einsum("bqhd,bkhd->bhqk", query, key, preferred_element_type=jnp.float32)
+        logits = logits * self.head_dim**-0.5
+        mask = tactile_mask[:, None, None, :]
+        weights = jax.nn.softmax(jnp.where(mask, logits, jnp.finfo(jnp.float32).min), axis=-1)
+        weights = jnp.where(mask, weights, 0).astype(base.dtype)
+        attended = jnp.einsum("bhqk,bkhd->bqhd", weights, value).reshape(base.shape)
+        residual = self.out(attended)
+        # The key mask is the supplied per-example contact gate broadcast over tokens.
+        contact = jnp.any(tactile_mask, axis=-1)[:, None, None]
+        scale = jnp.tanh(self.alpha.value) * contact
+        return base + (scale * residual).astype(base.dtype)
 
 
 def create_tactile_encoder(

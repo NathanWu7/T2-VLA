@@ -505,6 +505,43 @@ class TaberoTacFieldDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class TaberoTacCoRLDataConfig(DataConfigFactory):
+    """Two cameras and marker history, with a contact gate computed before normalization."""
+
+    extra_delta_transform: bool = True
+    contact_threshold: float = 1.0
+    contact_min_active: int = 5
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        data_transforms = _transforms.Group(
+            inputs=[
+                libero_policy.TaberoTacCoRLInputs(
+                    model_type=model_config.model_type,
+                    contact_threshold=self.contact_threshold,
+                    contact_min_active=self.contact_min_active,
+                )
+            ],
+            outputs=[libero_policy.LiberoForceOutputs()],
+        )
+
+        if self.extra_delta_transform:
+            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class TaberoTacForceDataConfig(DataConfigFactory):
     """
     Tabero（两路图像 + 8×6 指力历史 + 13D 动作）数据配置。
@@ -1866,6 +1903,58 @@ _CONFIGS = [
             tactile_loss_weight=0.01,
         ),
         data=TaberoTacFieldDataConfig(
+            repo_id="xiangxin0923/realworld_replayed_task820",
+            assets=AssetsConfig(asset_id="pi05_horizon50_tacfield_task820_firm_mixed"),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        batch_size=16,
+        num_workers=2,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=2.5e-5,
+            decay_steps=1_000_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*",
+        ),
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi05_lora_taccorl_realworld_replayed_task820_firm_mixed_no_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            action_horizon=50,
+            discrete_state_input=False,
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_prefix_dim_in=9 * 440 * 2,
+            tactile_prefix_history=TABERO_TACTILE_HISTORY,
+            tactile_prefix_encoder_type="tcn",
+            tactile_prefix_use_reference_frame=True,
+            tactile_prefix_diff_from_reference=False,
+            tactile_fusion="taccorl",
+            tactile_streams=("tactile_prefix", "tactile_suffix"),
+            tactile_prefix_num_tokens=8,
+            tactile_suffix_num_tokens=8,
+            tactile_prefix_cross_attn=True,
+            tactile_loss_weight=0.01,
+        ),
+        data=TaberoTacCoRLDataConfig(
             repo_id="xiangxin0923/realworld_replayed_task820",
             assets=AssetsConfig(asset_id="pi05_horizon50_tacfield_task820_firm_mixed"),
             base_config=DataConfig(prompt_from_task=True),
