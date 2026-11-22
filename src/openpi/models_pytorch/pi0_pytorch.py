@@ -9,7 +9,14 @@ import torch.nn.functional as F  # noqa: N812
 import openpi.models.gemma as _gemma
 from openpi.models_pytorch.gemma_pytorch import PaliGemmaWithExpertModel
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
-from openpi.models_pytorch.tactile_encoder_pytorch import TactileTCNEncoder
+from openpi.models_pytorch.tactile_encoder_pytorch import (
+    MarkerTokenEncoder,
+    TactilePrefixCrossAttention,
+    TactileTCNEncoder,
+)
+
+
+_CONTACT_UNSET = object()
 
 
 def get_safe_dtype(target_dtype, device_type):
@@ -98,17 +105,19 @@ class PI0Pytorch(nn.Module):
             precision=config.dtype,
         )
 
-        self.action_in_proj = nn.Linear(32, action_expert_config.width)
-        self.action_out_proj = nn.Linear(action_expert_config.width, 32)
+        self.action_in_proj = nn.Linear(config.action_dim, action_expert_config.width)
+        self.action_out_proj = nn.Linear(action_expert_config.width, config.action_dim)
 
         if self.pi05:
             self.time_mlp_in = nn.Linear(action_expert_config.width, action_expert_config.width)
             self.time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
         else:
-            self.state_proj = nn.Linear(32, action_expert_config.width)
+            self.state_proj = nn.Linear(config.action_dim, action_expert_config.width)
             self.action_time_mlp_in = nn.Linear(2 * action_expert_config.width, action_expert_config.width)
             self.action_time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
 
+        self.marker_token_encoder = None
+        self.tactile_cross_attn = None
         self._init_tactile_prefix_encoder()
 
         torch.set_float32_matmul_precision("high")
@@ -127,6 +136,13 @@ class PI0Pytorch(nn.Module):
             raise ValueError(msg) from None
 
     def _init_tactile_prefix_encoder(self):
+        if getattr(self.config, "tactile_fusion", "none") == "taccorl":
+            self._init_taccorl_modules()
+            # TacCoRL has its own multi-token encoder; never instantiate the
+            # legacy single-token tactile_prefix_encoder alongside it.
+            self.tactile_prefix_encoder = None
+            return
+
         tactile_streams = tuple(getattr(self.config, "tactile_streams", ()) or ())
         tactile_prefix_dim_in = getattr(self.config, "tactile_prefix_dim_in", None)
         if "tactile_prefix" not in tactile_streams or not tactile_prefix_dim_in or tactile_prefix_dim_in <= 0:
@@ -162,6 +178,73 @@ class PI0Pytorch(nn.Module):
             has_reference_frame=has_reference_frame,
             diff_from_reference=diff_from_reference,
         )
+
+    def _init_taccorl_modules(self):
+        """Build the PyTorch modules corresponding to JAX TacCoRL modules."""
+        tactile_type = getattr(self.config, "tactile_type", None)
+        # Avoid importing the enum here: training configs may use a compatible
+        # enum object, and the required marker fields below give clearer errors.
+        if tactile_type is None or (
+            getattr(tactile_type, "name", None) != "EXPERT_HIS_C_FUT"
+            and str(tactile_type).split(".")[-1] != "EXPERT_HIS_C_FUT"
+        ):
+            raise ValueError("taccorl requires tactile_type=EXPERT_HIS_C_FUT.")
+
+        streams = set(tuple(getattr(self.config, "tactile_streams", ()) or ()))
+        if streams != {"tactile_prefix", "tactile_suffix"}:
+            raise ValueError("taccorl requires both tactile_prefix and tactile_suffix in tactile_streams.")
+
+        required = (
+            "tactile_prefix_dim_in",
+            "tactile_prefix_history",
+            "tactile_prefix_use_reference_frame",
+            "tactile_prefix_diff_from_reference",
+            "tactile_prefix_num_tokens",
+            "tactile_suffix_num_tokens",
+            "tactile_prefix_cross_attn",
+            "tactile_cross_attn_heads",
+        )
+        missing = [name for name in required if not hasattr(self.config, name) or getattr(self.config, name) is None]
+        if missing:
+            raise ValueError(f"taccorl requires {', '.join(missing)}.")
+        if getattr(self.config, "tactile_suffix_placement", "suffix") != "suffix":
+            raise ValueError("taccorl requires tactile_suffix_placement='suffix'.")
+
+        prefix_dim_in = self.config.tactile_prefix_dim_in
+        history_len = self.config.tactile_prefix_history
+        has_reference = self.config.tactile_prefix_use_reference_frame
+        diff_from_reference = self.config.tactile_prefix_diff_from_reference
+        if history_len <= 0:
+            raise ValueError("taccorl requires tactile_prefix_history > 0.")
+        steps = history_len + int(has_reference)
+        if prefix_dim_in <= 0 or prefix_dim_in % steps:
+            raise ValueError("taccorl requires tactile_prefix_dim_in divisible by history plus reference frames.")
+        input_dim = prefix_dim_in // steps
+        if input_dim % 2:
+            raise ValueError("taccorl requires tactile_prefix_dim_in = frames * markers * 2.")
+        if min(self.config.tactile_prefix_num_tokens, self.config.tactile_suffix_num_tokens) <= 0:
+            raise ValueError("taccorl requires positive tactile token counts.")
+        if self.config.tactile_cross_attn_heads <= 0:
+            raise ValueError("taccorl requires tactile_cross_attn_heads > 0.")
+
+        prefix_width = _gemma.get_config(self.config.paligemma_variant).width
+        action_width = _gemma.get_config(self.config.action_expert_variant).width
+        self.marker_token_encoder = MarkerTokenEncoder(
+            in_dim=input_dim,
+            history_len=history_len,
+            has_reference_frame=has_reference,
+            diff_from_reference=diff_from_reference,
+            prefix_width=prefix_width,
+            suffix_width=action_width,
+            prefix_num_tokens=self.config.tactile_prefix_num_tokens,
+            suffix_num_tokens=self.config.tactile_suffix_num_tokens,
+        )
+        if self.config.tactile_prefix_cross_attn:
+            if prefix_width % self.config.tactile_cross_attn_heads:
+                raise ValueError("tactile_cross_attn_heads must divide the PaliGemma width.")
+            self.tactile_cross_attn = TactilePrefixCrossAttention(
+                prefix_width, self.config.tactile_cross_attn_heads
+            )
 
     def gradient_checkpointing_enable(self):
         """Enable gradient checkpointing for memory optimization."""
@@ -200,7 +283,11 @@ class PI0Pytorch(nn.Module):
 
     def _preprocess_observation(self, observation, *, train=True):
         """Helper method to preprocess observation."""
-        observation = _preprocessing.preprocess_observation_pytorch(observation, train=train)
+        observation = _preprocessing.preprocess_observation_pytorch(
+            observation,
+            train=train,
+            image_noise_std=float(getattr(self.config, "image_noise_std", 0.0)),
+        )
         return (
             list(observation.images.values()),
             list(observation.image_masks.values()),
@@ -209,6 +296,36 @@ class PI0Pytorch(nn.Module):
             observation.state,
             getattr(observation, "tactile_prefix", None),
         )
+
+    @staticmethod
+    def _get_tactile_contact(observation):
+        """Return the per-example contact gate; ``None`` means all gates open."""
+        return getattr(observation, "tactile_contact", None)
+
+    def _marker_token_mask(self, tactile_tokens, tactile_contact):
+        if tactile_contact is None:
+            contact = torch.ones(
+                tactile_tokens.shape[0], dtype=torch.bool, device=tactile_tokens.device
+            )
+        else:
+            contact = torch.as_tensor(tactile_contact, device=tactile_tokens.device, dtype=torch.bool)
+            if contact.shape != (tactile_tokens.shape[0],):
+                raise ValueError(
+                    f"tactile_contact must have shape {(tactile_tokens.shape[0],)}, got {tuple(contact.shape)}."
+                )
+        return contact[:, None].expand(-1, tactile_tokens.shape[1])
+
+    def _encode_marker_tokens(self, tactile_prefix):
+        marker_encoder = getattr(self, "marker_token_encoder", None)
+        if marker_encoder is None:
+            return None
+        if tactile_prefix is None:
+            raise ValueError("taccorl requires observation.tactile_prefix containing per-frame marker vectors.")
+        tactile_prefix = tactile_prefix.to(
+            device=marker_encoder.prefix_proj.weight.device,
+            dtype=marker_encoder.prefix_proj.weight.dtype,
+        )
+        return self._apply_checkpoint(marker_encoder, tactile_prefix)
 
     def sample_noise(self, shape, device):
         return torch.normal(
@@ -228,9 +345,23 @@ class PI0Pytorch(nn.Module):
         return time.to(dtype=torch.float32, device=device)
 
     def embed_prefix(
-        self, images, img_masks, lang_tokens, lang_masks, tactile_prefix=None
+        self,
+        images,
+        img_masks,
+        lang_tokens,
+        lang_masks,
+        tactile_prefix=None,
+        *,
+        marker_tokens=None,
+        tactile_contact=_CONTACT_UNSET,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Embed images, language, and optional Tabero tactile prefix tokens."""
+        """Embed image/language tokens and optional tactile prefix tokens.
+
+        ``marker_tokens`` and ``tactile_contact`` are keyword-only additions;
+        the legacy positional call shape remains unchanged for RLinf clients.
+        """
+        if getattr(self.config, "tactile_fusion", "none") == "taccorl" and tactile_contact is _CONTACT_UNSET:
+            raise ValueError("embed_prefix requires explicit tactile_contact in taccorl mode; pass None for open gates.")
         embs = []
         pad_masks = []
         att_masks = []
@@ -266,7 +397,20 @@ class PI0Pytorch(nn.Module):
         num_lang_embs = lang_emb.shape[1]
         att_masks += [0] * num_lang_embs
 
-        if self.tactile_prefix_encoder is not None and tactile_prefix is not None:
+        if getattr(self, "marker_token_encoder", None) is not None:
+            if marker_tokens is None:
+                marker_tokens = self._encode_marker_tokens(tactile_prefix)
+            tactile_emb = marker_tokens[0].to(device=lang_emb.device, dtype=lang_emb.dtype)
+            tactile_mask = self._marker_token_mask(tactile_emb, tactile_contact)
+            base_embs = torch.cat(embs, dim=1)
+            if self.tactile_cross_attn is not None:
+                base_embs = self._apply_checkpoint(
+                    self.tactile_cross_attn, base_embs, tactile_emb, tactile_mask
+                )
+            embs = [base_embs, tactile_emb]
+            pad_masks.append(tactile_mask)
+            att_masks += [0] * tactile_emb.shape[1]
+        elif self.tactile_prefix_encoder is not None and tactile_prefix is not None:
             tactile_prefix = tactile_prefix.to(
                 device=lang_emb.device,
                 dtype=self.tactile_prefix_encoder.out_proj.weight.dtype,
@@ -291,11 +435,37 @@ class PI0Pytorch(nn.Module):
 
         return embs, pad_masks, att_masks
 
-    def embed_suffix(self, state, noisy_actions, timestep):
-        """Embed state, noisy_actions, timestep to prepare for Expert Gemma processing."""
+    def embed_suffix(
+        self,
+        state,
+        noisy_actions,
+        timestep,
+        *,
+        tactile_prefix=None,
+        marker_tokens=None,
+        tactile_contact=_CONTACT_UNSET,
+    ):
+        """Embed tactile markers, state, noisy actions, and timestep.
+
+        TacCoRL marker tokens are prepended before the state/action suffix. The
+        extra arguments are keyword-only so legacy callers keep their signature.
+        """
+        if getattr(self.config, "tactile_fusion", "none") == "taccorl" and tactile_contact is _CONTACT_UNSET:
+            raise ValueError("embed_suffix requires explicit tactile_contact in taccorl mode; pass None for open gates.")
         embs = []
         pad_masks = []
         att_masks = []
+
+        if getattr(self, "marker_token_encoder", None) is not None:
+            if marker_tokens is None:
+                marker_tokens = self._encode_marker_tokens(tactile_prefix)
+            tactile_emb = marker_tokens[1].to(device=noisy_actions.device, dtype=noisy_actions.dtype)
+            tactile_mask = self._marker_token_mask(tactile_emb, tactile_contact)
+            embs.append(tactile_emb)
+            pad_masks.append(tactile_mask)
+            # The first tactile token starts the suffix causal block; the
+            # remaining marker tokens share that block, matching JAX.
+            att_masks += [1] + ([0] * (tactile_emb.shape[1] - 1))
 
         if not self.pi05:
             if self.state_proj.weight.dtype == torch.float32:
@@ -365,7 +535,8 @@ class PI0Pytorch(nn.Module):
 
         embs = torch.cat(embs, dim=1)
         pad_masks = torch.cat(pad_masks, dim=1)
-        att_masks = torch.tensor(att_masks, dtype=embs.dtype, device=embs.device)
+        att_dtype = torch.bool if getattr(self, "marker_token_encoder", None) is not None else embs.dtype
+        att_masks = torch.tensor(att_masks, dtype=att_dtype, device=embs.device)
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
 
         return embs, pad_masks, att_masks, adarms_cond
@@ -386,10 +557,31 @@ class PI0Pytorch(nn.Module):
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
 
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks, tactile_prefix
-        )
-        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, time)
+        if getattr(self.config, "tactile_fusion", "none") == "taccorl":
+            tactile_contact = self._get_tactile_contact(observation)
+            marker_tokens = self._encode_marker_tokens(tactile_prefix)
+            prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+                images,
+                img_masks,
+                lang_tokens,
+                lang_masks,
+                tactile_prefix,
+                marker_tokens=marker_tokens,
+                tactile_contact=tactile_contact,
+            )
+            suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(
+                state,
+                x_t,
+                time,
+                tactile_prefix=tactile_prefix,
+                marker_tokens=marker_tokens,
+                tactile_contact=tactile_contact,
+            )
+        else:
+            prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+                images, img_masks, lang_tokens, lang_masks, tactile_prefix
+            )
+            suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, time)
         if (
             self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype
             == torch.bfloat16
@@ -447,9 +639,23 @@ class PI0Pytorch(nn.Module):
             observation, train=False
         )
 
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks, tactile_prefix
-        )
+        taccorl = getattr(self.config, "tactile_fusion", "none") == "taccorl"
+        if taccorl:
+            tactile_contact = self._get_tactile_contact(observation)
+            marker_tokens = self._encode_marker_tokens(tactile_prefix)
+            prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+                images,
+                img_masks,
+                lang_tokens,
+                lang_masks,
+                tactile_prefix,
+                marker_tokens=marker_tokens,
+                tactile_contact=tactile_contact,
+            )
+        else:
+            prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+                images, img_masks, lang_tokens, lang_masks, tactile_prefix
+            )
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
 
@@ -472,13 +678,19 @@ class PI0Pytorch(nn.Module):
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
         while time >= -dt / 2:
             expanded_time = time.expand(bsize)
-            v_t = self.denoise_step(
-                state,
-                prefix_pad_masks,
-                past_key_values,
-                x_t,
-                expanded_time,
-            )
+            if not taccorl:
+                v_t = self.denoise_step(state, prefix_pad_masks, past_key_values, x_t, expanded_time)
+            else:
+                v_t = self.denoise_step(
+                    state,
+                    prefix_pad_masks,
+                    past_key_values,
+                    x_t,
+                    expanded_time,
+                    marker_tokens=marker_tokens,
+                    tactile_prefix=tactile_prefix,
+                    tactile_contact=tactile_contact,
+                )
 
             # Euler step - use new tensor assignment instead of in-place operation
             x_t = x_t + dt * v_t
@@ -492,15 +704,38 @@ class PI0Pytorch(nn.Module):
         past_key_values,
         x_t,
         timestep,
+        *,
+        marker_tokens=None,
+        tactile_prefix=None,
+        tactile_contact=_CONTACT_UNSET,
     ):
         """Apply one denoising step of the noise `x_t` at a given timestep."""
-        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, timestep)
+        if getattr(self.config, "tactile_fusion", "none") == "taccorl":
+            if tactile_contact is _CONTACT_UNSET:
+                raise ValueError(
+                    "denoise_step requires explicit tactile_contact in taccorl mode; pass None for open gates."
+                )
+            suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(
+                state,
+                x_t,
+                timestep,
+                marker_tokens=marker_tokens,
+                tactile_prefix=tactile_prefix,
+                tactile_contact=tactile_contact,
+            )
+        else:
+            suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, timestep)
 
         suffix_len = suffix_pad_masks.shape[1]
         batch_size = prefix_pad_masks.shape[0]
         prefix_len = prefix_pad_masks.shape[1]
 
         prefix_pad_2d_masks = prefix_pad_masks[:, None, :].expand(batch_size, suffix_len, prefix_len)
+        if getattr(self, "marker_token_encoder", None) is not None:
+            # Match JAX's query-side gate: closed tactile suffix rows cannot
+            # attend any prefix keys, while valid state/action rows retain the
+            # regular prefix padding mask.
+            prefix_pad_2d_masks = prefix_pad_2d_masks & suffix_pad_masks[:, :, None]
 
         suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
 

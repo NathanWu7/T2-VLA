@@ -69,6 +69,7 @@ class Pi0(_model.BaseModel):
     def __init__(self, config: pi0_config.Pi0Config, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
+        self.image_noise_std = config.image_noise_std
         self.tactile_type = config.tactile_type
         self.tactile_dim = config.tactile_dim
         self.tactile_history = config.tactile_history
@@ -425,6 +426,7 @@ class Pi0(_model.BaseModel):
             observation,
             train=train,
             tactile_type=self.tactile_type,
+            image_noise_std=self.image_noise_std,
         )
 
         batch_shape = actions.shape[:-2]
@@ -529,6 +531,7 @@ class Pi0(_model.BaseModel):
             observation,
             train=False,
             tactile_type=self.tactile_type,
+            image_noise_std=self.image_noise_std,
         )
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.

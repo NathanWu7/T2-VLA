@@ -78,6 +78,34 @@ class AssetsConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class CoTrainDatasetSpec:
+    """One side of a TacCoRL real/simulation mixture."""
+
+    repo_id: str
+    episodes: tuple[int, ...] | None = None
+    episode_source: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.episodes is not None and self.episode_source is not None:
+            raise ValueError("CoTrainDatasetSpec.episodes and episode_source are mutually exclusive.")
+        if self.episodes is not None and any(not isinstance(episode, int) for episode in self.episodes):
+            raise TypeError("CoTrainDatasetSpec.episodes must contain only integers.")
+
+
+@dataclasses.dataclass(frozen=True)
+class CoTrainConfig:
+    """Configuration for the Eq. 7 real/simulation data mixture."""
+
+    real: CoTrainDatasetSpec
+    sim: CoTrainDatasetSpec
+    sim_weight: float = 0.5
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.sim_weight <= 1.0:
+            raise ValueError(f"sim_weight must be in [0, 1], got {self.sim_weight}.")
+
+
+@dataclasses.dataclass(frozen=True)
 class DataConfig:
     # LeRobot repo id. If None, fake data will be created.
     repo_id: str | None = None
@@ -117,6 +145,11 @@ class DataConfig:
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # Path to the data filter file for DROID dataset
     filter_dict_path: str | None = None
+
+    # Optional TacCoRL simulation/real mixture.  ``repo_id`` remains the
+    # factory's asset/norm-stat lookup id when this is set; the two specs are
+    # the dataset ids actually used by the loader.
+    cotrain: CoTrainConfig | None = None
 
 
 class GroupFactory(Protocol):
@@ -511,6 +544,7 @@ class TaberoTacCoRLDataConfig(DataConfigFactory):
     extra_delta_transform: bool = True
     contact_threshold: float = 1.0
     contact_min_active: int = 5
+    cotrain: CoTrainConfig | None = None
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -538,6 +572,7 @@ class TaberoTacCoRLDataConfig(DataConfigFactory):
             self.create_base_config(assets_dirs, model_config),
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+            cotrain=self.cotrain,
         )
 
 
@@ -1974,6 +2009,72 @@ _CONFIGS = [
             missing_regex=".*",
         ),
         num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi05_lora_taccorl_cotrain_task820_firm_mixed_no_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            action_horizon=50,
+            discrete_state_input=False,
+            effective_action_dim=13,
+            tactile_type=TactileType.EXPERT_HIS_C_FUT,
+            tactile_dim=6,
+            tactile_dim_in=0,
+            tactile_prefix_dim_in=9 * 440 * 2,
+            tactile_prefix_history=TABERO_TACTILE_HISTORY,
+            tactile_prefix_encoder_type="tcn",
+            tactile_prefix_use_reference_frame=True,
+            tactile_prefix_diff_from_reference=False,
+            tactile_fusion="taccorl",
+            tactile_streams=("tactile_prefix", "tactile_suffix"),
+            tactile_prefix_num_tokens=8,
+            tactile_suffix_num_tokens=8,
+            tactile_prefix_cross_attn=True,
+            tactile_loss_weight=0.01,
+            image_noise_std=0.03,
+        ),
+        data=TaberoTacCoRLDataConfig(
+            repo_id="xiangxin0923/realworld_replayed_task820",
+            assets=AssetsConfig(asset_id="pi05_horizon50_taccorl_task820_firm_mixed_cotrain"),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+            contact_threshold=1.0,
+            contact_min_active=5,
+            cotrain=CoTrainConfig(
+                real=CoTrainDatasetSpec(
+                    repo_id="xiangxin0923/realworld_replayed_task820",
+                    episode_source="realworld",
+                ),
+                sim=CoTrainDatasetSpec(
+                    repo_id="xiangxin0923/realworld_replayed_task820",
+                    episode_source="replay",
+                ),
+                sim_weight=0.5,
+            ),
+        ),
+        batch_size=192,
+        num_workers=2,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=100,
+            peak_lr=2.5e-5,
+            decay_steps=3000,
+            decay_lr=5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*",
+        ),
+        num_train_steps=3000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             discrete_state_input=False,

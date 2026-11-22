@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 @dataclasses.dataclass(frozen=True)
 class Pi0Config(_model.BaseModelConfig):
     dtype: str = "bfloat16"
+    # Training-only Gaussian image noise, specified in [0, 1] pixel units.
+    image_noise_std: float = 0.0
     paligemma_variant: _gemma.Variant = "gemma_2b"
     action_expert_variant: _gemma.Variant = "gemma_300m"
 
@@ -110,6 +112,8 @@ class Pi0Config(_model.BaseModelConfig):
     tactile_cross_attn_heads: int = 8
 
     def __post_init__(self):
+        if self.image_noise_std < 0:
+            raise ValueError("image_noise_std must be >= 0.")
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
         if self.discrete_state_input is None:

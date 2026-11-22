@@ -13,6 +13,7 @@ import dataclasses
 import hashlib
 from importlib import metadata as importlib_metadata
 import json
+import logging
 import pathlib
 from typing import Any
 
@@ -25,6 +26,7 @@ from openpi.models_pytorch import pi0_pytorch
 
 BUNDLE_FORMAT = "tabero_rlinf_openpi_lora_bundle"
 BUNDLE_FORMAT_VERSION = 1
+COMPATIBLE_PEFT_VERSIONS = frozenset({"0.20.0", "0.21.0"})
 RL_ONLY_PREFIXES = (
     "value_head.",
     "noise_head.",
@@ -51,6 +53,8 @@ _SAFETENSORS_DTYPES = {
     "F32": torch.float32,
     "F64": torch.float64,
 }
+
+logger = logging.getLogger("openpi")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -122,7 +126,7 @@ def _verify_bundle_checksums(bundle_root: pathlib.Path) -> dict[str, str]:
     return checksums
 
 
-def _validate_manifest(manifest: Mapping[str, Any]) -> None:
+def _validate_manifest(manifest: Mapping[str, Any]) -> tuple[str, str]:
     if manifest.get("format") != BUNDLE_FORMAT:
         raise ValueError(f"Unsupported LoRA bundle format: {manifest.get('format')!r}")
     if manifest.get("format_version") != BUNDLE_FORMAT_VERSION:
@@ -130,11 +134,28 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
     target = manifest.get("lora_target")
     if target not in {"paligemma", "action_expert", "both"}:
         raise ValueError(f"Unsupported LoRA bundle target: {target!r}")
+    bundle_peft = manifest.get("peft_version")
     installed_peft = importlib_metadata.version("peft")
-    if manifest.get("peft_version") != installed_peft:
+    allowed_versions = sorted(COMPATIBLE_PEFT_VERSIONS)
+    if not isinstance(bundle_peft, str):
         raise ValueError(
-            f"LoRA bundle PEFT version mismatch: bundle={manifest.get('peft_version')!r}, installed={installed_peft!r}"
+            "LoRA bundle PEFT version must be a string in the compatibility allowlist: "
+            f"bundle={bundle_peft!r}, installed={installed_peft!r}, allowlist={allowed_versions!r}"
         )
+    if not isinstance(installed_peft, str) or (
+        bundle_peft not in COMPATIBLE_PEFT_VERSIONS
+        or installed_peft not in COMPATIBLE_PEFT_VERSIONS
+    ):
+        raise ValueError(
+            "LoRA bundle PEFT version is outside the compatibility allowlist: "
+            f"bundle={bundle_peft!r}, installed={installed_peft!r}, allowlist={allowed_versions!r}"
+        )
+    # The final merged tensor hash is authoritative. Cross-version 0.20/0.21
+    # loads and merged exports are bitwise identical; see
+    # results/2026-11-20-taccorl-adapt/peft021_compat/.
+    if bundle_peft != installed_peft:
+        logger.info("Loading PEFT bundle version %s with installed PEFT %s", bundle_peft, installed_peft)
+    return bundle_peft, installed_peft
 
 
 def _validate_base_contract(manifest: Mapping[str, Any], base_weight_path: pathlib.Path) -> set[str]:
@@ -427,7 +448,7 @@ def load_lora_bundle_model(
     _verify_bundle_checksums(bundle_root)
     manifest_path = bundle_root / "manifest.json"
     manifest = _load_json(manifest_path)
-    _validate_manifest(manifest)
+    bundle_peft_version, installed_peft_version = _validate_manifest(manifest)
 
     weight_path = pathlib.Path(base_weight_path).expanduser().resolve()
     base_keys = _validate_base_contract(manifest, weight_path)
@@ -460,6 +481,8 @@ def load_lora_bundle_model(
         "bundle_path": str(bundle_root),
         "manifest_sha256": _sha256_file(manifest_path),
         "lora_target": manifest["lora_target"],
+        "bundle_peft_version": bundle_peft_version,
+        "installed_peft_version": installed_peft_version,
         "base_model_sha256": manifest["base_model"]["model_sha256"],
         "checkpoint": manifest.get("checkpoint"),
         "policy_contract": policy_contract,

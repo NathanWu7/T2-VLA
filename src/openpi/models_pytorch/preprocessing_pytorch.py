@@ -21,6 +21,7 @@ def preprocess_observation_pytorch(
     observation,
     *,
     train: bool = False,
+    image_noise_std: float = 0.0,
     image_keys: Sequence[str] = IMAGE_KEYS,
     image_resolution: tuple[int, int] = IMAGE_RESOLUTION,
 ):
@@ -28,6 +29,8 @@ def preprocess_observation_pytorch(
 
     This function avoids complex type annotations that can cause torch.compile issues.
     """
+    if image_noise_std < 0:
+        raise ValueError(f"image_noise_std must be >= 0, got {image_noise_std}.")
     if not set(image_keys).issubset(observation.images):
         raise ValueError(f"images dict missing keys: expected {image_keys}, got {list(observation.images)}")
 
@@ -141,6 +144,15 @@ def preprocess_observation_pytorch(
             # Back to [-1, 1]
             image = image * 2.0 - 1.0
 
+            # The configured sigma is in [0, 1] pixel units.  The image is in
+            # [-1, 1] here, so its standard deviation is 2*sigma.
+            if image_noise_std:
+                image = torch.clamp(
+                    image + torch.randn_like(image) * (2.0 * image_noise_std),
+                    min=-1.0,
+                    max=1.0,
+                )
+
         # Convert back to [B, C, H, W] format if it was originally channels-first
         if is_channels_first:
             image = image.permute(0, 3, 1, 2)  # [B, H, W, C] -> [B, C, H, W]
@@ -172,4 +184,5 @@ def preprocess_observation_pytorch(
         token_loss_mask=observation.token_loss_mask,
         tactile_prefix=getattr(observation, "tactile_prefix", None),
         tactile_suffix=getattr(observation, "tactile_suffix", None),
+        tactile_contact=getattr(observation, "tactile_contact", None),
     )

@@ -17,6 +17,7 @@ pa.set_memory_pool(pa.system_memory_pool())
 import dataclasses
 
 import numpy as np
+import torch
 import tqdm
 import tyro
 
@@ -40,18 +41,27 @@ def create_torch_dataloader(
     num_workers: int,
     max_frames: int | None = None,
 ) -> tuple[_data_loader.Dataset, int]:
-    if data_config.repo_id is None:
+    if data_config.repo_id is None and data_config.cotrain is None:
         raise ValueError("Data config must have a repo_id")
-    dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config)
-    dataset = _data_loader.TransformedDataset(
-        dataset,
-        [
-            *data_config.repack_transforms.inputs,
-            *data_config.data_transforms.inputs,
-            # Remove strings since they are not supported by JAX and are not needed to compute norm stats.
-            RemoveStrings(),
-        ],
-    )
+    transform_chain = [
+        *data_config.repack_transforms.inputs,
+        *data_config.data_transforms.inputs,
+        # Remove strings since they are not supported by JAX and are not needed to compute norm stats.
+        RemoveStrings(),
+    ]
+    if data_config.cotrain is None:
+        dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config)
+        dataset = _data_loader.TransformedDataset(dataset, transform_chain)
+    else:
+        real_dataset, sim_dataset = _data_loader.create_cotrain_datasets(data_config, action_horizon, model_config)
+        # ConcatDataset preserves sample-count weighting and the exact update
+        # order of a plain concatenated dataset; no sim_weight is applied here.
+        dataset = torch.utils.data.ConcatDataset(
+            [
+                _data_loader.TransformedDataset(real_dataset, transform_chain),
+                _data_loader.TransformedDataset(sim_dataset, transform_chain),
+            ]
+        )
     if max_frames is not None and max_frames < len(dataset):
         num_batches = max_frames // batch_size
         shuffle = True
@@ -140,7 +150,13 @@ def main(
         if getattr(rs, "_count", 0) >= 2
     }
 
-    output_path = config.assets_dirs / data_config.repo_id
+    # Keep the historical repo-id output for ordinary configs.  A co-training
+    # config has one asset id for the union statistics, even though it has two
+    # actual dataset repo ids.
+    asset_id = data_config.asset_id if data_config.cotrain is not None else data_config.repo_id
+    if asset_id is None:
+        raise ValueError("Data config must provide an asset_id or repo_id for normalization stats.")
+    output_path = config.assets_dirs / asset_id
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -168,7 +169,7 @@ def _make_bundle(tmp_path: Path, target: str) -> tuple[Path, Path, _TinyModel]:
     manifest = {
         "format": bundle.BUNDLE_FORMAT,
         "format_version": bundle.BUNDLE_FORMAT_VERSION,
-        "peft_version": "0.19.1",
+        "peft_version": "0.21.0",
         "lora_target": target,
         "base_model": {
             "model_file": "model.safetensors",
@@ -237,10 +238,29 @@ def test_tiny_live_peft_matches_bundle_merged_on_load(tmp_path, monkeypatch, tar
     )
 
     assert loaded.metadata["lora_target"] == target
+    assert loaded.metadata["bundle_peft_version"] == "0.21.0"
+    assert loaded.metadata["installed_peft_version"] == bundle.importlib_metadata.version("peft")
     assert loaded.norm_assets_dir == root / "assets"
     assert not any("lora_" in key for key in loaded.model.state_dict())
     for key, expected_value in expected.state_dict().items():
         torch.testing.assert_close(loaded.model.state_dict()[key], expected_value, rtol=0, atol=0)
+
+
+def test_tiny_bundle_loads_allowlisted_cross_version(tmp_path, monkeypatch):
+    root, base_dir, _ = _make_bundle(tmp_path, "action_expert")
+    monkeypatch.setattr(bundle.pi0_pytorch, "PI0Pytorch", lambda config: _TinyModel())
+    monkeypatch.setattr(bundle.importlib_metadata, "version", lambda _: "0.20.0")
+
+    loaded = bundle.load_lora_bundle_model(
+        _train_config(),
+        base_dir / "model.safetensors",
+        root,
+        base_config_name="tiny_config",
+        norm_asset_id="tiny_asset",
+    )
+
+    assert loaded.metadata["bundle_peft_version"] == "0.21.0"
+    assert loaded.metadata["installed_peft_version"] == "0.20.0"
 
 
 def _rewrite_manifest(root: Path, mutate) -> None:
@@ -249,6 +269,56 @@ def _rewrite_manifest(root: Path, mutate) -> None:
     mutate(manifest)
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
     _write_checksums(root)
+
+
+def _policy_manifest(peft_version="0.20.0") -> dict:
+    return {
+        "format": bundle.BUNDLE_FORMAT,
+        "format_version": bundle.BUNDLE_FORMAT_VERSION,
+        "lora_target": "action_expert",
+        "peft_version": peft_version,
+    }
+
+
+def test_manifest_accepts_allowlisted_cross_version(monkeypatch, caplog):
+    monkeypatch.setattr(bundle.importlib_metadata, "version", lambda _: "0.21.0")
+
+    with caplog.at_level(logging.INFO, logger="openpi"):
+        versions = bundle._validate_manifest(_policy_manifest("0.20.0"))  # noqa: SLF001
+
+    assert versions == ("0.20.0", "0.21.0")
+    assert "0.20.0" in caplog.text and "0.21.0" in caplog.text
+
+
+def test_manifest_rejects_non_allowlisted_bundle_version(monkeypatch):
+    monkeypatch.setattr(bundle.importlib_metadata, "version", lambda _: "0.21.0")
+
+    with pytest.raises(ValueError, match="allowlist") as error:
+        bundle._validate_manifest(_policy_manifest("0.22.0"))  # noqa: SLF001
+
+    assert "bundle='0.22.0'" in str(error.value)
+    assert "installed='0.21.0'" in str(error.value)
+
+
+def test_manifest_rejects_non_allowlisted_installed_version(monkeypatch):
+    monkeypatch.setattr(bundle.importlib_metadata, "version", lambda _: "0.22.0")
+
+    with pytest.raises(ValueError, match="allowlist") as error:
+        bundle._validate_manifest(_policy_manifest("0.21.0"))  # noqa: SLF001
+
+    assert "bundle='0.21.0'" in str(error.value)
+    assert "installed='0.22.0'" in str(error.value)
+
+
+@pytest.mark.parametrize("peft_version", [None, 123])
+def test_manifest_rejects_missing_or_non_string_version(monkeypatch, peft_version):
+    monkeypatch.setattr(bundle.importlib_metadata, "version", lambda _: "0.21.0")
+
+    manifest = _policy_manifest(peft_version)
+    if peft_version is None:
+        manifest.pop("peft_version")
+    with pytest.raises(ValueError, match="must be a string"):
+        bundle._validate_manifest(manifest)  # noqa: SLF001
 
 
 @pytest.mark.parametrize(

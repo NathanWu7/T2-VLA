@@ -153,7 +153,7 @@ def train_step(
     config: _config.TrainConfig,
     rng: at.KeyArrayLike,
     state: training_utils.TrainState,
-    batch: tuple[_model.Observation, _model.Actions],
+    batch: tuple[_model.Observation, _model.Actions] | tuple[_model.Observation, _model.Actions, at.Array],
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     model = nnx.merge(state.model_def, state.params)
     model.train()
@@ -184,10 +184,37 @@ def train_step(
             "action_loss": action_loss_mean,
             "tactile_loss": tactile_loss_mean,
         }
+        if domain is not None:
+            per_sample_loss = (
+                jnp.mean(chunked_loss, axis=tuple(range(1, chunked_loss.ndim)))
+                if chunked_loss.ndim > 1
+                else chunked_loss
+            )
+            sim_mask = domain == 1
+            real_mask = domain == 0
+            count_sim = jnp.sum(sim_mask)
+            count_real = jnp.sum(real_mask)
+            aux.update(
+                {
+                    "loss_sim": jnp.where(
+                        count_sim > 0,
+                        jnp.sum(jnp.where(sim_mask, per_sample_loss, 0.0)) / jnp.maximum(count_sim, 1),
+                        0.0,
+                    ),
+                    "loss_real": jnp.where(
+                        count_real > 0,
+                        jnp.sum(jnp.where(real_mask, per_sample_loss, 0.0)) / jnp.maximum(count_real, 1),
+                        0.0,
+                    ),
+                    "count_sim": count_sim,
+                    "count_real": count_real,
+                }
+            )
         return total_loss, aux
 
     train_rng = jax.random.fold_in(rng, state.step)
-    observation, actions = batch
+    observation, actions = batch[:2]
+    domain = batch[2] if len(batch) == 3 else None
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
@@ -229,6 +256,15 @@ def train_step(
         "action_loss": aux["action_loss"],
         "tactile_loss": aux["tactile_loss"],
     }
+    if domain is not None:
+        info.update(
+            {
+                "loss_sim": aux["loss_sim"],
+                "loss_real": aux["loss_real"],
+                "count_sim": aux["count_sim"],
+                "count_real": aux["count_real"],
+            }
+        )
     return new_state, info
 
 
@@ -307,6 +343,15 @@ def main(config: _config.TrainConfig):
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
             reduced_info["learning_rate"] = np.asarray(learning_rate_schedule(step))
+            # Domain losses are meaningful only when that domain contributed to
+            # the logging window.  The counts remain available in the info
+            # dict for this decision but are not emitted as user metrics.
+            if float(np.asarray(reduced_info.get("count_sim", 0))) <= 0:
+                reduced_info.pop("loss_sim", None)
+            if float(np.asarray(reduced_info.get("count_real", 0))) <= 0:
+                reduced_info.pop("loss_real", None)
+            reduced_info.pop("count_sim", None)
+            reduced_info.pop("count_real", None)
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)

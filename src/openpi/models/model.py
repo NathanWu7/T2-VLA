@@ -165,18 +165,33 @@ def preprocess_observation(
     image_keys: Sequence[str] = IMAGE_KEYS,
     image_resolution: tuple[int, int] = IMAGE_RESOLUTION,
     tactile_type: TactileType = TactileType.NO,
+    image_noise_std: float = 0.0,
 ) -> Observation:
     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
     filling in a default image mask (if necessary).
     """
 
+    if image_noise_std < 0:
+        raise ValueError(f"image_noise_std must be >= 0, got {image_noise_std}.")
     if not set(image_keys).issubset(observation.images):
         raise ValueError(f"images dict missing keys: expected {image_keys}, got {list(observation.images)}")
 
     batch_shape = observation.state.shape[:-1]
 
     out_images = {}
-    for key in image_keys:
+    # Keep augmentation and image-noise keys independent while preserving the
+    # existing per-example augmax contract.
+    if train and rng is None:
+        raise ValueError("rng is required when train=True.")
+    if train:
+        # Preserve the existing augmentation stream for both settings. Noise
+        # receives a deterministic, independent fold of the same caller key.
+        aug_rng = rng
+        noise_rng = jax.random.fold_in(rng, 0x4E4F4953) if image_noise_std else None
+    else:
+        aug_rng, noise_rng = None, None
+
+    for image_index, key in enumerate(image_keys):
         image = observation.images[key]
         if image.shape[1:3] != image_resolution:
             logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
@@ -197,11 +212,17 @@ def preprocess_observation(
             transforms += [
                 augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5),
             ]
-            sub_rngs = jax.random.split(rng, image.shape[0])
+            sub_rngs = jax.random.split(aug_rng, image.shape[0])
             image = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image)
 
             # Back to [-1, 1].
             image = image * 2.0 - 1.0
+            if image_noise_std:
+                image_noise_key = jax.random.fold_in(noise_rng, image_index)
+                image = image + (2.0 * image_noise_std) * jax.random.normal(
+                    image_noise_key, image.shape, dtype=image.dtype
+                )
+                image = jnp.clip(image, -1.0, 1.0)
 
         out_images[key] = image
 
