@@ -127,32 +127,9 @@ class PaliGemmaWithExpertModel(nn.Module):
             models = [self.paligemma.language_model, self.gemma_expert.model]
             num_layers = self.paligemma.config.text_config.num_hidden_layers
 
-            # Check if gradient checkpointing is enabled for any of the models
-            use_gradient_checkpointing = (
-                hasattr(self.gemma_expert.model, "gradient_checkpointing")
-                and self.gemma_expert.model.gradient_checkpointing
-                and self.training
-            ) or (hasattr(self, "gradient_checkpointing") and self.gradient_checkpointing and self.training)
-
-            # Force enable gradient checkpointing if we're in training mode and the model supports it
-            if self.training and hasattr(self.gemma_expert.model, "gradient_checkpointing"):
-                if not self.gemma_expert.model.gradient_checkpointing:
-                    print("Forcing gradient checkpointing to be enabled for Gemma expert model")
-                    self.gemma_expert.model.gradient_checkpointing = True
-                use_gradient_checkpointing = True
-
-            # Debug gradient checkpointing status
-            if hasattr(self, "_debug_gc_printed") and not self._debug_gc_printed:
-                print(f"Gemma expert model gradient checkpointing: {use_gradient_checkpointing}")
-                print(f"Model training mode: {self.training}")
-                print(
-                    f"Gemma expert model has gradient_checkpointing attr: {hasattr(self.gemma_expert.model, 'gradient_checkpointing')}"
-                )
-                if hasattr(self.gemma_expert.model, "gradient_checkpointing"):
-                    print(
-                        f"Gemma expert model gradient_checkpointing value: {self.gemma_expert.model.gradient_checkpointing}"
-                    )
-                self._debug_gc_printed = True
+            use_gradient_checkpointing = self.training and (
+                self.gemma_expert.model.gradient_checkpointing or self.paligemma.language_model.gradient_checkpointing
+            )
 
             # Define the complete layer computation function for gradient checkpointing
             def compute_layer_complete(layer_idx, inputs_embeds, attention_mask, position_ids, adarms_cond):

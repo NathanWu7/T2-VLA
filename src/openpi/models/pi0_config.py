@@ -122,6 +122,16 @@ class Pi0Config(_model.BaseModelConfig):
             object.__setattr__(self, "tactile_dim_in", self.tactile_dim)
         if self.effective_action_dim is None:
             object.__setattr__(self, "effective_action_dim", self.action_dim)
+        # RLinf's Hydra/dataclass bridge serializes enum fields as strings,
+        # while native OpenPI configs use ``TactileType`` members. Normalize at
+        # this boundary so identity checks and the PyTorch adapter share one
+        # canonical value.
+        if isinstance(self.tactile_type, str):
+            name = self.tactile_type.rsplit(".", 1)[-1].upper()
+            try:
+                object.__setattr__(self, "tactile_type", TactileType[name])
+            except KeyError as exc:
+                raise ValueError(f"Unknown tactile_type: {self.tactile_type!r}.") from exc
         if self.tactile_fusion not in ("none", "taccorl"):
             raise ValueError(f"Unknown tactile_fusion: {self.tactile_fusion!r}.")
         if self.tactile_fusion == "taccorl":
