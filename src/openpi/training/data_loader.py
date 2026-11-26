@@ -663,7 +663,7 @@ def create_torch_data_loader(
     """
     cotrain = data_config.cotrain
     if cotrain is None:
-        dataset = create_torch_dataset(data_config, action_horizon, model_config)
+        dataset = create_torch_dataset(data_config, action_horizon, model_config, episodes=data_config.episodes)
         dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
     else:
         real_dataset, sim_dataset = create_cotrain_datasets(data_config, action_horizon, model_config)

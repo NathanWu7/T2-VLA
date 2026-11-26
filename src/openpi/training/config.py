@@ -139,6 +139,9 @@ class DataConfig:
     # `get_safe_version`, which requires such a tag). Example: the branch name main.
     lerobot_revision: str | None = None
 
+    # Select complete episodes before transforms and distributed sampling.
+    episodes: Sequence[int] | None = None
+
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
     # Action space for DROID dataset.

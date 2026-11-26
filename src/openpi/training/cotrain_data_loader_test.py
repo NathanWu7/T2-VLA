@@ -31,6 +31,25 @@ def test_frame_indices_for_interleaved_episode_subset():
     )
 
 
+def test_single_domain_loader_filters_before_sampling(monkeypatch):
+    from openpi.training import config, data_loader
+
+    dataset = _SyntheticDataset([10, 11, 12, 13, 14])
+    dataset.hf_dataset = {"episode_index": [0, 1, 0, 2, 1]}
+    monkeypatch.setattr(data_loader, "_create_full_torch_dataset", lambda *a, **kw: (dataset, None))
+    monkeypatch.setattr(data_loader, "transform_dataset", lambda dataset, *a, **kw: dataset)
+    monkeypatch.setattr(data_loader, "DataLoaderImpl", lambda config, loader: loader)
+    loader = data_loader.create_torch_data_loader(
+        config.DataConfig(repo_id="synthetic", episodes=(1,)),
+        None,
+        action_horizon=1,
+        batch_size=2,
+        framework="pytorch",
+        num_batches=1,
+    )
+    np.testing.assert_array_equal(next(iter(loader))["value"], [11, 14])
+
+
 def test_stratified_sampler_exact_fraction_and_determinism():
     sampler = StratifiedBatchSampler(7, 5, batch_size=10, sim_weight=0.3, seed=17, num_batches=25)
     batches = list(sampler)
