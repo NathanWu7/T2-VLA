@@ -174,6 +174,12 @@ uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi05_libero --p
 
 This will spin up a server that listens on port 8000 and waits for observations to be sent to it. We can then run an evaluation script (or robot runtime) that queries the server.
 
+For Taco, use the Hugging Face model name as the T2-VLA configuration. The launcher downloads the checkpoint on the first run and serves it from `checkpoints/<config>/<experiment>/29999/`. For the published Taco models, the experiment name matches the config name.
+
+    bash server.sh pi05_lora_tacfield_pick_and_place_vr_sim_nostate 29999
+
+For a direct `serve_policy.py` invocation, set `--policy.dir` to the step directory containing `params/` and `assets/`.
+
 For running the LIBERO eval in particular, we provide (and recommend using) a Dockerized workflow that handles both the policy server and the evaluation script together. See the [LIBERO README](examples/libero/README.md) for more details.
 
 If you want to embed a policy server call in your own robot runtime, we have a minimal example of how to do so in the [remote inference docs](docs/remote_inference.md).

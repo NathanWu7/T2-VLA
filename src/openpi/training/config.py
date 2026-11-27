@@ -1774,9 +1774,9 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi05_lora_tacimg_realworld_replayed_task820_current_nostate",
+        name="pi05_lora_tacimg_pick_and_place_sim_replay_current_nostate",
         # 与 pi05_lora_tacimg_realworld_replayed_task820_current 相同，仅 discrete_state_input=False。
-        # 推理：bash server.sh pi05_lora_tacimg_realworld_replayed_task820_current_nostate 29999
+        # 推理：bash server.sh pi05_lora_tacimg_pick_and_place_sim_replay_current_nostate 29999
         model=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
@@ -1790,7 +1790,7 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         data=TaberoTacImgDataConfig(
-            repo_id="xiangxin0923/realworld_replayed_task820_current",
+            repo_id="xiangxin0923/taco_pick_and_place_sim_replay_current",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2250,10 +2250,10 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi05_lora_tacimg_realworld_task_blackboard_fan_shuaka_current_nostate",
+        name="pi05_lora_tacimg_real_plus_vr_current_nostate",
         # img π₀.₅ state=false current：三路图 + 13D +FS，discrete_state_input=False。
         # 数据：xiangxin0923/realworld_task_blackboard_fan_shuaka_current
-        # 推理：bash server.sh pi05_lora_tacimg_realworld_task_blackboard_fan_shuaka_current_nostate 29999
+        # 推理：bash server.sh pi05_lora_tacimg_real_plus_vr_current_nostate 29999
         model=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
@@ -2268,6 +2268,7 @@ _CONFIGS = [
         ),
         data=TaberoTacImgDataConfig(
             repo_id="xiangxin0923/realworld_task_blackboard_fan_shuaka_current",
+            assets=AssetsConfig(asset_id="xiangxin0923/taco_real_plus_vr_current"),
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2292,10 +2293,10 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi05_lora_tacfield_realworld_task_blackboard_fan_shuaka_current_nostate",
+        name="pi05_lora_tacfield_real_plus_vr_current_nostate",
         # FIELD+FS π₀.₅ state input=false：两路图 + tacfield（marker_motion → TCN prefix）+ 13D 力监督。
         # marker 为 [9, 440, 2]。数据：xiangxin0923/realworld_task_blackboard_fan_shuaka_current
-        # 推理：bash server.sh pi05_lora_tacfield_realworld_task_blackboard_fan_shuaka_current_nostate 29999
+        # 推理：bash server.sh pi05_lora_tacfield_real_plus_vr_current_nostate 29999
         model=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
@@ -2315,6 +2316,7 @@ _CONFIGS = [
         ),
         data=TaberoTacFieldDataConfig(
             repo_id="xiangxin0923/realworld_task_blackboard_fan_shuaka_current",
+            assets=AssetsConfig(asset_id="xiangxin0923/taco_real_plus_vr_current"),
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2392,10 +2394,10 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi05_lora_tacfield_realworld_task820_current_nostate",
+        name="pi05_lora_tacfield_pick_and_place_vr_current_nostate",
         # FIELD+FS π₀.₅ state input=false：两路图 + tacfield（marker_motion → TCN prefix）+ 13D 力监督。
         # marker 为 [9, 440, 2]。数据：xiangxin0923/realworld_task820_current（5 Hz）。
-        # 推理：bash server.sh pi05_lora_tacfield_realworld_task820_current_nostate 29999
+        # 推理：bash server.sh pi05_lora_tacfield_pick_and_place_vr_current_nostate 29999
         model=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
@@ -2414,7 +2416,7 @@ _CONFIGS = [
             tactile_loss_weight=0.01,
         ),
         data=TaberoTacFieldDataConfig(
-            repo_id="xiangxin0923/realworld_task820_current",
+            repo_id="xiangxin0923/taco_pick_and_place_vr_current",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2443,10 +2445,10 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi05_lora_tacfield_realworld_taskumi_nostate",
+        name="pi05_lora_tacfield_pick_and_place_umi_current_nostate",
         # FIELD+FS π₀.₅ state input=false：与 pi05_lora_tacfield_realworld_task820_current_nostate 相同。
         # 数据：xiangxin0923/realworld_taskumi（20 Hz，维他奶/可乐/饼干 firm+gentle）。
-        # 推理：bash server.sh pi05_lora_tacfield_realworld_taskumi_nostate 29999
+        # 推理：bash server.sh pi05_lora_tacfield_pick_and_place_umi_current_nostate 29999
         model=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
@@ -2465,7 +2467,7 @@ _CONFIGS = [
             tactile_loss_weight=0.01,
         ),
         data=TaberoTacFieldDataConfig(
-            repo_id="xiangxin0923/realworld_taskumi",
+            repo_id="xiangxin0923/taco_pick_and_place_umi_current",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2494,10 +2496,10 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi05_lora_tacfield_realworld_taskumi_820_mix_nostate",
+        name="pi05_lora_tacfield_pick_and_place_vr_umi_nostate",
         # FIELD+FS π₀.₅ state input=false：与 pi05_lora_tacfield_realworld_taskumi_nostate 相同。
         # 数据：xiangxin0923/realworld_taskumi_820_mix（taskumi 20Hz + task820_current 5Hz 拼接，约 1:1）。
-        # 推理：bash server.sh pi05_lora_tacfield_realworld_taskumi_820_mix_nostate 29999
+        # 推理：bash server.sh pi05_lora_tacfield_pick_and_place_vr_umi_nostate 29999
         model=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
@@ -2517,6 +2519,7 @@ _CONFIGS = [
         ),
         data=TaberoTacFieldDataConfig(
             repo_id="xiangxin0923/realworld_taskumi_820_mix",
+            assets=AssetsConfig(asset_id="xiangxin0923/taco_pick_and_place_vr_umi"),
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2712,7 +2715,7 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi05_lora_tacfield_realworld_replayed_task820",
+        name="pi05_lora_tacfield_pick_and_place_sim_replay_4x4",
         # 两路图 + tacfield（marker_motion → TCN prefix）。marker 为 [9, 440, 2]。
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -2732,7 +2735,7 @@ _CONFIGS = [
             tactile_loss_weight=0.01,
         ),
         data=TaberoTacFieldDataConfig(
-            repo_id="xiangxin0923/realworld_replayed_task820",
+            repo_id="xiangxin0923/taco_pick_and_place_sim_replay_4x4",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2760,9 +2763,9 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi05_lora_tacfield_realworld_replayed_task820_nostate",
+        name="pi05_lora_tacfield_pick_and_place_sim_replay_4x4_nostate",
         # 与 pi05_lora_tacfield_realworld_replayed_task820 相同（两路图 + tacfield + 13D +FS），仅 discrete_state_input=False。
-        # 推理：bash server.sh pi05_lora_tacfield_realworld_replayed_task820_nostate 29999
+        # 推理：bash server.sh pi05_lora_tacfield_pick_and_place_sim_replay_4x4_nostate 29999
         model=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
@@ -2781,7 +2784,7 @@ _CONFIGS = [
             tactile_loss_weight=0.01,
         ),
         data=TaberoTacFieldDataConfig(
-            repo_id="xiangxin0923/realworld_replayed_task820",
+            repo_id="xiangxin0923/taco_pick_and_place_sim_replay_4x4",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2809,9 +2812,9 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi05_lora_notac_realworld_replayed_task820",
+        name="pi05_lora_notac_pick_and_place_sim_replay_4x4",
         # 两路图、无触觉输入（无 tactile_image / marker / force token），13D 动作与另外三路对齐。
-        # 推理：bash server.sh pi05_lora_notac_realworld_replayed_task820 29999
+        # 推理：bash server.sh pi05_lora_notac_pick_and_place_sim_replay_4x4 29999
         model=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
@@ -2825,7 +2828,7 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         data=TaberoNoTactForceDataConfig(
-            repo_id="xiangxin0923/realworld_replayed_task820",
+            repo_id="xiangxin0923/taco_pick_and_place_sim_replay_4x4",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2850,10 +2853,10 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi0_lora_tacforce_enc_realworld_replayed_task820",
+        name="pi0_lora_tacforce_enc_pick_and_place_sim_replay_4x4",
         # Force E+FS π₀：两路图 + 8×6 指力历史作为 encoder-prefix + 13D 力监督。
         # 结构抄 pi0_lora_tacforce_tabero_enc；数据 / 超参抄 replayed task820。
-        # 推理：bash server.sh pi0_lora_tacforce_enc_realworld_replayed_task820 29999
+        # 推理：bash server.sh pi0_lora_tacforce_enc_pick_and_place_sim_replay_4x4 29999
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
@@ -2870,7 +2873,7 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         data=TaberoTacForceEncDataConfig(
-            repo_id="xiangxin0923/realworld_replayed_task820",
+            repo_id="xiangxin0923/taco_pick_and_place_sim_replay_4x4",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2896,10 +2899,10 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi0_lora_tacforce_dec_realworld_replayed_task820",
+        name="pi0_lora_tacforce_dec_pick_and_place_sim_replay_4x4",
         # Force D+FS π₀：两路图 + 8×6 指力历史作为 decoder-suffix + 13D 力监督。
         # 结构抄 pi0_lora_tacforce_tabero；数据 / 超参抄 replayed task820。
-        # 推理：bash server.sh pi0_lora_tacforce_dec_realworld_replayed_task820 29999
+        # 推理：bash server.sh pi0_lora_tacforce_dec_pick_and_place_sim_replay_4x4 29999
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
@@ -2912,7 +2915,7 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         data=TaberoTacForceDataConfig(
-            repo_id="xiangxin0923/realworld_replayed_task820",
+            repo_id="xiangxin0923/taco_pick_and_place_sim_replay_4x4",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2938,10 +2941,10 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi0_lora_tacfield_realworld_replayed_task820",
+        name="pi0_lora_tacfield_pick_and_place_sim_replay_4x4",
         # FIELD+FS π₀：两路图 + tacfield（marker_motion → TCN prefix）+ 13D 力监督。
         # 结构抄 pi0_lora_tacfield_tabero，marker 用 task820 的 [9, 440, 2]；数据 / 超参抄 replayed task820。
-        # 推理：bash server.sh pi0_lora_tacfield_realworld_replayed_task820 29999
+        # 推理：bash server.sh pi0_lora_tacfield_pick_and_place_sim_replay_4x4 29999
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
@@ -2958,7 +2961,7 @@ _CONFIGS = [
             tactile_loss_weight=TACTILE_LOSS_WEIGHT,
         ),
         data=TaberoTacFieldDataConfig(
-            repo_id="xiangxin0923/realworld_replayed_task820",
+            repo_id="xiangxin0923/taco_pick_and_place_sim_replay_4x4",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -2984,10 +2987,10 @@ _CONFIGS = [
         ema_decay=None,
     ),
     TrainConfig(
-        name="pi0_lora_tacimgwo_realworld_replayed_task820",
+        name="pi0_lora_tacimgwo_pick_and_place_sim_replay_4x4",
         # Img π₀：三路图、无 tactile token，tactile_loss_weight=0。
         # 动作仍为 13 维，训练时只监督前 7 维关节。
-        # 推理：bash server.sh pi0_lora_tacimgwo_realworld_replayed_task820 29999
+        # 推理：bash server.sh pi0_lora_tacimgwo_pick_and_place_sim_replay_4x4 29999
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
@@ -2999,7 +3002,7 @@ _CONFIGS = [
             tactile_loss_weight=0.0,
         ),
         data=TaberoTacImgDataConfig(
-            repo_id="xiangxin0923/realworld_replayed_task820",
+            repo_id="xiangxin0923/taco_pick_and_place_sim_replay_4x4",
             base_config=DataConfig(
                 prompt_from_task=True,
             ),
@@ -3745,6 +3748,37 @@ _CONFIGS = [
     #
     *roboarena_config.get_roboarena_configs(),
 ]
+
+# Taco replay mixtures share the Field+FS no-state model and differ in data and normalization.
+_taco_mixture_base = next(config for config in _CONFIGS if config.name == "pi05_lora_tacfield_pick_and_place_vr_umi_nostate")
+for _name, _dataset, _asset in (
+    (
+        "pi05_lora_tacfield_pick_and_place_vr_sim_nostate",
+        "xiangxin0923/task820_two_replay",
+        "xiangxin0923/taco_pick_and_place_vr_sim",
+    ),
+    (
+        "pi05_lora_tacfield_pick_and_place_sim_umi_nostate",
+        "xiangxin0923/umi_two_replay",
+        "xiangxin0923/taco_pick_and_place_sim_umi",
+    ),
+    (
+        "pi05_lora_tacfield_pick_and_place_vr_sim_umi_nostate",
+        "xiangxin0923/umi_task820_two_replay",
+        "xiangxin0923/taco_pick_and_place_vr_sim_umi",
+    ),
+):
+    _CONFIGS.append(
+        dataclasses.replace(
+            _taco_mixture_base,
+            name=_name,
+            data=dataclasses.replace(
+                _taco_mixture_base.data,
+                repo_id=_dataset,
+                assets=AssetsConfig(asset_id=_asset),
+            ),
+        )
+    )
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
     raise ValueError("Config names must be unique.")
